@@ -82,6 +82,8 @@ export function useCreateChannelForm({
   const [selectedTemplateId, setSelectedTemplateId] = React.useState<
     string | null
   >(initialTemplateId ?? null);
+  const [sectionDefaultTemplateId, setSectionDefaultTemplateId] =
+    React.useState<string | null>(initialTemplateId ?? null);
   const [typePopoverOpen, setTypePopoverOpen] = React.useState(false);
   const nameInputRef = React.useRef<HTMLInputElement>(null);
   const visibilityTouchedRef = React.useRef(false);
@@ -101,6 +103,7 @@ export function useCreateChannelForm({
     setTtlSeconds(DEFAULT_EPHEMERAL_TTL_SECONDS);
     setErrorMessage(null);
     setSelectedTemplateId(initialTemplateId ?? null);
+    setSectionDefaultTemplateId(initialTemplateId ?? null);
     setTypePopoverOpen(false);
     visibilityTouchedRef.current = false;
     initialTemplateAppliedRef.current = null;
@@ -134,20 +137,35 @@ export function useCreateChannelForm({
   }, []);
 
   React.useEffect(() => {
-    if (
-      !active ||
-      !initialTemplateId ||
-      initialTemplateAppliedRef.current === initialTemplateId
-    ) {
-      return;
-    }
+    if (!active || !initialTemplateId) return;
+    // Do not treat an empty/error query result as proof that a section's
+    // template was deleted. Wait for a successful template fetch.
+    if (!templatesQuery.isSuccess) return;
+
     const template = templates.find(
       (candidate) => candidate.id === initialTemplateId,
     );
-    if (!template) return;
+    if (!template) {
+      // A section can outlive its template. Clear the stale selection so the
+      // form does not submit an ID that cannot be applied after creation.
+      initialTemplateAppliedRef.current = initialTemplateId;
+      setSelectedTemplateId(null);
+      setSectionDefaultTemplateId(null);
+      setDescription("");
+      if (!visibilityTouchedRef.current) setVisibility("open");
+      setErrorMessage(null);
+      return;
+    }
+    if (initialTemplateAppliedRef.current === initialTemplateId) return;
     initialTemplateAppliedRef.current = initialTemplateId;
     applyTemplate(template);
-  }, [active, applyTemplate, initialTemplateId, templates]);
+  }, [
+    active,
+    applyTemplate,
+    initialTemplateId,
+    templates,
+    templatesQuery.isSuccess,
+  ]);
 
   const handleTemplateCreated = React.useCallback(
     (template: ChannelTemplate) => {
@@ -246,7 +264,7 @@ export function useCreateChannelForm({
     handleTemplateChange,
     handleTemplateCreated,
     templates,
-    sectionDefaultTemplateId: initialTemplateId ?? null,
+    sectionDefaultTemplateId,
     nameInputRef,
     isCreating,
     canSubmit: name.trim().length > 0 && !isCreating,
