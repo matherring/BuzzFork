@@ -39,6 +39,15 @@ async function emitMessage(page: Page, input: MockMessageInput) {
   }, input);
 }
 
+function localFileCard(page: Page, filename: string) {
+  return page.getByTestId("local-file-card").filter({
+    has: page.getByRole("button", {
+      exact: true,
+      name: `More actions for ${filename}`,
+    }),
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   await installMockBridge(page);
   await page.goto("/");
@@ -55,10 +64,7 @@ test("uses the native default-app command for a local Markdown card", async ({
     content: `Open ${path}.`,
   });
 
-  const card = page
-    .getByTestId("message-row")
-    .filter({ hasText: path })
-    .getByTestId("local-file-card");
+  const card = localFileCard(page, "REPORT.md");
   await card.getByTestId("local-file-card-open").click();
 
   await expect
@@ -68,7 +74,7 @@ test("uses the native default-app command for a local Markdown card", async ({
       ),
     )
     .toBe(true);
-  await expect(page.getByTestId("document-viewer-pane")).toBeHidden();
+  await expect(page.getByTestId("document-viewer-content")).toBeHidden();
 });
 
 test("opens a local Markdown preview from the explicit card menu action", async ({
@@ -80,21 +86,18 @@ test("opens a local Markdown preview from the explicit card menu action", async 
     content: `Open ${path}.`,
   });
 
-  const card = page
-    .getByTestId("message-row")
-    .filter({ hasText: path })
-    .getByTestId("local-file-card");
+  const card = localFileCard(page, "REPORT.md");
   await card.getByTestId("local-file-card-menu").click();
   await page.getByRole("button", { name: "Preview in Buzz" }).click();
 
-  await expect(page.getByTestId("document-viewer-pane")).toBeVisible();
+  await expect(page.getByTestId("document-viewer-content")).toBeVisible();
   await expect(page.getByTestId("document-viewer-markdown")).toContainText(
     "Viewer heading",
   );
   await expect(page.getByTestId("message-timeline")).toBeVisible();
 
   await page.getByRole("button", { name: "Close document viewer" }).click();
-  await expect(page.getByTestId("document-viewer-pane")).toBeHidden();
+  await expect(page.getByTestId("document-viewer-content")).toBeHidden();
 });
 
 test("shows an explicit denial for a local path outside the approved root", async ({
@@ -106,14 +109,11 @@ test("shows an explicit denial for a local path outside the approved root", asyn
     content: `Open ${path}.`,
   });
 
-  const card = page
-    .getByTestId("message-row")
-    .filter({ hasText: path })
-    .getByTestId("local-file-card");
+  const card = localFileCard(page, "NOTES.txt");
   await card.getByTestId("local-file-card-menu").click();
   await page.getByRole("button", { name: "Preview in Buzz" }).click();
 
-  await expect(page.getByTestId("document-viewer-pane")).toContainText(
+  await expect(page.getByTestId("document-viewer-content")).toContainText(
     "outside the locally approved document folders",
   );
 });
@@ -125,12 +125,7 @@ test("renders a local-file card without reading the path", async ({ page }) => {
     content: `Keep ${path} for later.`,
   });
 
-  await expect(
-    page
-      .getByTestId("message-row")
-      .filter({ hasText: path })
-      .getByTestId("local-file-card"),
-  ).toContainText("Reveal only");
+  await expect(localFileCard(page, "archive.zip")).toContainText("Reveal only");
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -149,10 +144,7 @@ test("approves a document folder through the backend-owned picker flow", async (
     content: `Open ${path}.`,
   });
 
-  const card = page
-    .getByTestId("message-row")
-    .filter({ hasText: path })
-    .getByTestId("local-file-card");
+  const card = localFileCard(page, "REPORT.md");
   await card.getByTestId("local-file-card-menu").click();
   await page.getByRole("button", { name: "Choose approved folder…" }).click();
 
@@ -189,7 +181,7 @@ test("opens a verified CSV attachment in the same side panel and keeps download"
   await expect(card.getByTestId("file-card-download")).toBeVisible();
   await card.getByTestId("file-card-open").click();
 
-  await expect(page.getByTestId("document-viewer-pane")).toBeVisible();
+  await expect(page.getByTestId("document-viewer-content")).toBeVisible();
   await expect(page.getByTestId("document-viewer-csv")).toContainText(
     "answer,42",
   );

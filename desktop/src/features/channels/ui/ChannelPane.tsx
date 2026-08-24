@@ -785,7 +785,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               onClose={closeDocumentViewer}
               request={documentViewerRequest}
             />,
-            "document-viewer-pane",
+            "document-viewer-panel",
           )
         ) : channelManagementOpen && activeChannel ? (
           <ChannelManagementAuxiliaryPanel
