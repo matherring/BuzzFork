@@ -261,9 +261,7 @@ fn verify_expected_hash(
     expected_sha256: Option<&str>,
     bytes: &[u8],
 ) -> Option<DocumentReadResult> {
-    let Some(expected_sha256) = expected_sha256.filter(|value| !value.is_empty()) else {
-        return None;
-    };
+    let expected_sha256 = expected_sha256.filter(|value| !value.is_empty())?;
     if expected_sha256.len() != 64
         || !expected_sha256
             .chars()
