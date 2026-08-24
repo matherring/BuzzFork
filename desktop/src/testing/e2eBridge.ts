@@ -12706,7 +12706,8 @@ export function maybeInstallE2eTauriMocks() {
         };
       }
       case "choose_document_root": {
-        const root = "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts";
+        const root =
+          "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts";
         mockDocumentRoots = [...new Set([...mockDocumentRoots, root])].sort();
         return [...mockDocumentRoots];
       }
