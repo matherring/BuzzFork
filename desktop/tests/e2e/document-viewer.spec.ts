@@ -8,6 +8,28 @@ type MockMessageInput = {
   extraTags?: string[][];
 };
 
+function cliDocumentUpload(filename: string, mime: string, size: number) {
+  const hash = "a".repeat(64);
+  const url = `https://relay.example/media/${hash}.bin`;
+  return {
+    // Exact generic-document shape emitted by `buzz messages send --file`:
+    // a normal filename anchor plus the filename-bearing imeta tag. This must
+    // not regress to the image syntax used for photos.
+    content: `\n[${filename}](${url})`,
+    extraTags: [
+      [
+        "imeta",
+        `url ${url}`,
+        `m ${mime}`,
+        `x ${hash}`,
+        `size ${size}`,
+        `filename ${filename}`,
+      ],
+    ],
+    url,
+  };
+}
+
 async function emitMessage(page: Page, input: MockMessageInput) {
   await page.waitForFunction(
     () => typeof window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__ === "function",
@@ -118,24 +140,49 @@ test("renders a local-file card without reading the path", async ({ page }) => {
     .toBe(false);
 });
 
+test("approves a document folder through the backend-owned picker flow", async ({
+  page,
+}) => {
+  const path = "/Users/adminmat/.codex/private/REPORT.md";
+  await emitMessage(page, {
+    channelName: "general",
+    content: `Open ${path}.`,
+  });
+
+  const card = page
+    .getByTestId("message-row")
+    .filter({ hasText: path })
+    .getByTestId("local-file-card");
+  await card.getByTestId("local-file-card-menu").click();
+  await page.getByRole("button", { name: "Choose approved folder…" }).click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__BUZZ_E2E_COMMANDS__?.includes("choose_document_root"),
+      ),
+    )
+    .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.__BUZZ_E2E_COMMANDS__?.some((command) =>
+          ["pick_document_root", "add_document_root"].includes(command),
+        ),
+      ),
+    )
+    .toBe(false);
+});
+
 test("opens a verified CSV attachment in the same side panel and keeps download", async ({
   page,
 }) => {
-  const url = `https://relay.example/media/${"a".repeat(64)}.bin`;
   const filename = "REPORT.csv";
+  const upload = cliDocumentUpload(filename, "application/octet-stream", 21);
   await emitMessage(page, {
     channelName: "general",
-    content: `[${filename}](${url})`,
-    extraTags: [
-      [
-        "imeta",
-        `url ${url}`,
-        "m application/octet-stream",
-        `x ${"a".repeat(64)}`,
-        "size 21",
-        `filename ${filename}`,
-      ],
-    ],
+    content: upload.content,
+    extraTags: upload.extraTags,
   });
 
   const card = page.getByTestId("file-card").filter({ hasText: filename });

@@ -37,13 +37,18 @@ pub struct BlobDescriptor {
 }
 
 /// Build an `imeta` tag array from a BlobDescriptor (NIP-92 media metadata).
-pub fn build_imeta_tag(d: &BlobDescriptor) -> Vec<String> {
+///
+/// `filename` is the sanitized local basename captured before upload. The
+/// relay stores blobs by content hash, so this is the only human-readable
+/// label Desktop has when it renders a generic document card.
+pub fn build_imeta_tag(d: &BlobDescriptor, filename: &str) -> Vec<String> {
     let mut tag = vec![
         "imeta".to_string(),
         format!("url {}", d.url),
         format!("m {}", d.mime_type),
         format!("x {}", d.sha256),
         format!("size {}", d.size),
+        format!("filename {filename}"),
     ];
     if let Some(ref dim) = d.dim {
         tag.push(format!("dim {dim}"));
@@ -2331,8 +2336,8 @@ mod retry_policy_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_query_cursor, create_response_with_id_if_accepted, extract_relay_response_field,
-        upload_mime_for_path, BuzzClient,
+        advance_query_cursor, build_imeta_tag, create_response_with_id_if_accepted,
+        extract_relay_response_field, upload_mime_for_path, BlobDescriptor, BuzzClient,
     };
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
@@ -2548,6 +2553,33 @@ mod tests {
         assert_eq!(
             upload_mime_for_path("document.pdf", b"%PDF-1.7\n"),
             "application/pdf"
+        );
+    }
+
+    #[test]
+    fn imeta_keeps_a_document_filename_for_desktop_file_cards() {
+        let descriptor = BlobDescriptor {
+            url: "https://relay.test/media/aaaaaaaa.pdf".into(),
+            sha256: "a".repeat(64),
+            size: 2048,
+            mime_type: "application/pdf".into(),
+            uploaded: 0,
+            dim: None,
+            blurhash: None,
+            thumb: None,
+            duration: None,
+        };
+
+        assert_eq!(
+            build_imeta_tag(&descriptor, "Q3-budget.pdf"),
+            vec![
+                "imeta",
+                "url https://relay.test/media/aaaaaaaa.pdf",
+                "m application/pdf",
+                &format!("x {}", "a".repeat(64)),
+                "size 2048",
+                "filename Q3-budget.pdf",
+            ]
         );
     }
 }

@@ -52,18 +52,11 @@ export function LocalFileCard({
 
   const chooseApprovedFolder = React.useCallback(async () => {
     try {
-      const selected = await invokeTauri<string | null>(
-        "pick_document_root",
+      const roots = await invokeTauri<string[] | null>(
+        "choose_document_root",
         {},
       );
-      if (!selected) return;
-      const confirmed = window.confirm(
-        `Allow Buzz to access local files under:\n\n${selected}\n\n` +
-          "Buzz will not upload those files. You can revoke this folder in Document access settings.",
-      );
-      if (!confirmed) return;
-      await invokeTauri("add_document_root", { root: selected });
-      toast.success("Document folder approved");
+      if (roots) toast.success("Document folder approved");
     } catch (error) {
       toast.error(errorMessage(error, "Could not approve the selected folder"));
     }

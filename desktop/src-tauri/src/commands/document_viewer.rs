@@ -7,7 +7,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_state::AppState;
@@ -626,8 +626,14 @@ pub(crate) fn read_local_document(
     )
 }
 
+/// Let the native picker and native confirmation dialog establish a new root.
+///
+/// This deliberately accepts no renderer-provided path: a message author can
+/// control card text, and the renderer is not a permission authority. The
+/// selected canonical directory is shown in the trusted dialog before it is
+/// persisted, so cancellation leaves the root store untouched.
 #[tauri::command]
-pub(crate) async fn pick_document_root(app: AppHandle) -> Result<Option<String>, String> {
+pub(crate) async fn choose_document_root(app: AppHandle) -> Result<Option<Vec<String>>, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog().file().pick_folder(move |path| {
         let _ = sender.send(path);
@@ -642,20 +648,38 @@ pub(crate) async fn pick_document_root(app: AppHandle) -> Result<Option<String>,
         .as_path()
         .ok_or_else(|| "the selected folder path is invalid".to_string())?;
     let canonical = canonical_document_root(path)?;
-    Ok(Some(canonical.to_string_lossy().into_owned()))
+    let canonical_scope = canonical.to_string_lossy().into_owned();
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "Allow Buzz to read local files under:\n\n{canonical_scope}\n\n\
+             Buzz will not upload those files. You can revoke this folder in Document access settings."
+        ))
+        .title("Approve document folder?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Approve".into(),
+            "Cancel".into(),
+        ))
+        .show(move |approved| {
+            let _ = sender.send(approved);
+        });
+    let approved = receiver
+        .await
+        .map_err(|_| "folder approval closed unexpectedly".to_string())?;
+    if !approved {
+        return Ok(None);
+    }
+
+    let mut roots = load_document_roots(&app)?;
+    roots.push(canonical);
+    save_document_roots(&app, roots).map(Some)
 }
 
 #[tauri::command]
 pub(crate) fn list_document_roots(app: AppHandle) -> Result<Vec<String>, String> {
     load_document_roots_store(&app).map(|store| store.roots)
-}
-
-#[tauri::command]
-pub(crate) fn add_document_root(root: String, app: AppHandle) -> Result<Vec<String>, String> {
-    let canonical = canonical_document_root(Path::new(&root))?;
-    let mut roots = load_document_roots(&app)?;
-    roots.push(canonical);
-    save_document_roots(&app, roots)
 }
 
 #[tauri::command]
