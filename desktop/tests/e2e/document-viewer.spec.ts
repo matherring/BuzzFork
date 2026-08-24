@@ -202,6 +202,8 @@ test("opens a verified CSV attachment in the same side panel and keeps download"
     "answer,42",
   );
   await expect(
-    page.getByRole("button", { name: `Download ${filename}` }),
+    page
+      .getByTestId("document-viewer-content")
+      .getByRole("button", { name: `Download ${filename}` }),
   ).toBeVisible();
 });

@@ -127,10 +127,12 @@ export function MediaContextMenu({
       const menu = menuRef.current;
       if (!menu) return;
 
-      const bounds = menu.getBoundingClientRect();
       const nextPosition = clampMediaContextMenuPosition(
         position,
-        { height: bounds.height, width: bounds.width },
+        // Offset dimensions intentionally ignore the enter animation's
+        // temporary zoom transform, so the final menu size is what gets
+        // clamped rather than its smaller initial frame.
+        { height: menu.offsetHeight, width: menu.offsetWidth },
         { height: window.innerHeight, width: window.innerWidth },
       );
       setPlacedPosition((current) =>
