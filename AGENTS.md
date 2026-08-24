@@ -95,11 +95,11 @@ scripts/              # Dev tooling
 
 ## BuzzFork Build and Storage Process
 
-1. **Preflight disk floor.** No build, test-suite, or packaging step starts with less than 50 GiB free, and aborts if it would drop below it.
-2. **Worktree budget.** At most two BuzzFork worktrees besides the primary checkout: one implementation and one packaging/canary. Delete a worktree when its branch merges or its purpose ends.
-3. **No full `just ci` locally.** Local checks are scoped to touched crates or packages and run through the disk guard. GitHub Actions runs the broad gate; until that is verified, the only fallback is one full local gate immediately before a canary, behind the preflight.
-4. **Canary hygiene.** One canary at a time, built from the active worktree with a shared build directory; retain only the app bundle and remove intermediates after the verdict.
-5. **Docker is off-limits to build hygiene.** Production relay containers and volumes are never pruned, stopped, or modified as part of cleanup.
+1. **Preflight disk floor.** No build, test-suite, or packaging step starts with less than 50 GiB free, and aborts if it would drop below it. Deterministic script, Woz owns it, both agents call it.
+2. **Worktree budget.** At most two BuzzFork worktrees besides the primary checkout: one implementation, one packaging/canary. Deleting a worktree when its branch merges or its purpose ends is part of finishing the task, not a separate cleanup project.
+3. **No full `just ci` locally.** Local checks are scoped to what changed (fmt/clippy/tests for the touched crates/packages). The broad gate runs on GitHub Actions against the pushed branch — `origin` is matherring/BuzzFork and `ci.yml` exists. GitHub Actions on the fork is verified live by run `32771725276`; a full local gate is fallback-only when GitHub Actions is unavailable, immediately before a canary, behind the preflight. Branch pushes to the fork for CI purposes need no sign-off; merges keep the existing Woz sign-off lane.
+4. **Canary hygiene.** One canary at a time, built from the active worktree with a shared build directory; copy out only the app bundle, delete intermediates after packaging, delete the bundle after its accept/fail verdict.
+5. **Docker is off-limits to build hygiene.** buzz-prod containers and volumes are the production relay. Never pruned, stopped, or modified as part of cleanup.
 
 Wrap every local build, test-suite, or packaging command with the disk guard. It checks the filesystem holding this checkout before launch and while the command runs, terminating the whole command process group if free space drops below 50 GiB:
 
