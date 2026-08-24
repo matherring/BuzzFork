@@ -14,6 +14,12 @@ import { toast } from "sonner";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { requestOpenSnapshotImport } from "@/features/agents/openSnapshotImportFromUrlEvent";
 import {
+  DocumentFileCard,
+  prepareDocumentMarkdown,
+  renderLocalDocumentAnchor,
+  renderLocalDocumentCode,
+} from "@/features/documents/markdownDocumentViewer";
+import {
   parseMessageLink,
   resolveMessageLinkRenderTarget,
   type ParsedMessageLink,
@@ -60,7 +66,6 @@ import {
   useOpenEntityLink,
 } from "./markdown/entityLinks";
 import { ExternalLinkAnchor } from "./markdown/ExternalLinkAnchor";
-import { FileCard } from "./markdown/FileCard";
 import { InlineEmojiPopover } from "./markdown/InlineEmojiPopover";
 import { createLinkPreviewImageLightbox } from "./markdown/LinkPreviewImageLightbox";
 import { MarkdownInput } from "./markdown/MarkdownInput";
@@ -1305,6 +1310,9 @@ function createMarkdownComponents(
 
     const label = getReactNodeText(children);
 
+    const localDocumentAnchor = renderLocalDocumentAnchor(href, children);
+    if (localDocumentAnchor) return localDocumentAnchor;
+
     // Snapshot attachment (agent or team): classify before generic FileCard.
     // resolveSnapshotCard checks the filename suffix + SHA-256 field.
     const snapshotCard = resolveSnapshotCard(
@@ -1334,19 +1342,12 @@ function createMarkdownComponents(
       );
     }
 
-    // Generic file attachment: a `[filename](url)` link whose href matches an
-    // imeta entry with a non-image, non-video MIME. Render a download card
-    // instead of a plain link. (Media uses the `img` renderer, not this path.)
     const card = resolveFileCard(
       href ? imetaByUrl?.get(href) : undefined,
       href,
       label,
     );
-    if (card) {
-      return (
-        <FileCard href={card.href} filename={card.filename} size={card.size} />
-      );
-    }
+    if (card) return <DocumentFileCard card={card} />;
 
     // Intercept `buzz://message?channel=…&id=…` links so a click navigates
     // in-app instead of opening the URL in the OS browser. http(s) links
@@ -1442,6 +1443,15 @@ function createMarkdownComponents(
       const code = rawCode.replace(/\n$/, "");
       const isFencedCodeBlock =
         typeof className === "string" && className.includes("language-");
+
+      const localDocumentCode = renderLocalDocumentCode({
+        children,
+        className,
+        code,
+        interactive,
+        isFencedCodeBlock,
+      });
+      if (localDocumentCode) return localDocumentCode;
 
       if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
         const language = extractLanguage(className);
@@ -1729,23 +1739,13 @@ function createMarkdownComponents(
   } as Components;
 }
 
-/**
- * The component map only varies by the two boolean render flags, so at most
- * four instances ever exist. Module-stable maps mean cached markdown element
- * trees (see ./markdown/nodeCache.ts) never embed per-mount closures.
- */
-const MARKDOWN_COMPONENT_SCHEMA_VERSION = "5";
+// Four module-stable maps keep cached trees free of per-mount closures.
+const MARKDOWN_COMPONENT_SCHEMA_VERSION = "6";
 const markdownComponentsByVariant = new Map<string, MarkdownComponentSet>();
 
 type MarkdownComponentSet = { components: Components; variant: string };
 
-/**
- * Returns the component map together with the `variant` token that fully
- * identifies it. The token doubles as the variant segment of the parse-cache
- * key (see nodeCache.ts), so the map partitioning and the key partitioning
- * come from one place and cannot drift apart: a new render flag added here
- * automatically partitions the cache too.
- */
+// The same variant keys both the component map and parsed-node cache.
 function getMarkdownComponents(
   interactive: boolean,
   mediaInset: boolean,
@@ -1854,7 +1854,7 @@ function MarkdownInner({
     ],
   );
 
-  let processedContent = content;
+  let processedContent = prepareDocumentMarkdown(content, interactive);
 
   // Note: stripping the sentinel here is intentionally omitted. When
   // configNudge !== null, selectProseOrNudge() returns null — suppressing

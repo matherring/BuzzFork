@@ -5,6 +5,8 @@ mod archive;
 mod builderlab;
 mod commands;
 mod deep_link;
+#[cfg(test)]
+mod document_viewer_tests;
 mod egress_guard;
 mod event_sync;
 mod events;
@@ -604,6 +606,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::document_viewer::read_document_attachment,
+            commands::document_viewer::read_local_document,
+            commands::document_viewer::choose_document_root,
+            commands::document_viewer::list_document_roots,
+            commands::document_viewer::remove_document_root,
+            commands::document_viewer::open_local_document,
+            commands::document_viewer::reveal_local_file,
+            commands::document_viewer::local_document_checksum,
             terminal_runtime::terminal_attach,
             terminal_runtime::terminal_detach,
             terminal_runtime::terminal_close,

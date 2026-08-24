@@ -37,13 +37,18 @@ pub struct BlobDescriptor {
 }
 
 /// Build an `imeta` tag array from a BlobDescriptor (NIP-92 media metadata).
-pub fn build_imeta_tag(d: &BlobDescriptor) -> Vec<String> {
+///
+/// `filename` is the sanitized local basename captured before upload. The
+/// relay stores blobs by content hash, so this is the only human-readable
+/// label Desktop has when it renders a generic document card.
+pub fn build_imeta_tag(d: &BlobDescriptor, filename: &str) -> Vec<String> {
     let mut tag = vec![
         "imeta".to_string(),
         format!("url {}", d.url),
         format!("m {}", d.mime_type),
         format!("x {}", d.sha256),
         format!("size {}", d.size),
+        format!("filename {filename}"),
     ];
     if let Some(ref dim) = d.dim {
         tag.push(format!("dim {dim}"));
@@ -67,6 +72,9 @@ const ALLOWED_MIMES: &[&str] = &[
     "image/gif",
     "image/webp",
     "video/mp4",
+    "application/pdf",
+    "text/plain",
+    "text/csv",
 ];
 
 /// Maximum file size for image uploads (50 MB).
@@ -74,6 +82,28 @@ const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
 /// Maximum file size for video uploads (500 MB).
 const MAX_VIDEO_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Maximum file size for text document uploads (2 MiB).
+const MAX_TEXT_DOCUMENT_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Maximum file size for PDF uploads (20 MiB).
+const MAX_PDF_DOCUMENT_BYTES: u64 = 20 * 1024 * 1024;
+
+fn upload_mime_for_path(file_path: &str, bytes: &[u8]) -> String {
+    if let Some(kind) = infer::get(bytes) {
+        return kind.mime_type().to_string();
+    }
+    match std::path::Path::new(file_path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("md" | "markdown" | "txt") => "text/plain".to_string(),
+        Some("csv") => "text/csv".to_string(),
+        _ => "application/octet-stream".to_string(),
+    }
+}
 
 /// Sign a NIP-98 HTTP auth event (kind:27235) and return the Authorization header value.
 ///
@@ -1108,10 +1138,9 @@ impl BuzzClient {
         let bytes = std::fs::read(file_path)
             .map_err(|e| CliError::Other(format!("failed to read {file_path}: {e}")))?;
 
-        // 2. Detect MIME from magic bytes
-        let mime = infer::get(&bytes)
-            .map(|t| t.mime_type().to_string())
-            .unwrap_or_else(|| "application/octet-stream".to_string());
+        // 2. Detect MIME from magic bytes, with a closed text-extension map
+        // for formats that intentionally have no magic signature.
+        let mime = upload_mime_for_path(file_path, &bytes);
 
         if !ALLOWED_MIMES.contains(&mime.as_str()) {
             return Err(CliError::Usage(format!("unsupported file type: {mime}")));
@@ -1120,8 +1149,12 @@ impl BuzzClient {
         // 3. Size check
         let max = if mime.starts_with("video/") {
             MAX_VIDEO_BYTES
-        } else {
+        } else if mime.starts_with("image/") {
             MAX_IMAGE_BYTES
+        } else if mime == "application/pdf" {
+            MAX_PDF_DOCUMENT_BYTES
+        } else {
+            MAX_TEXT_DOCUMENT_BYTES
         };
         if bytes.len() as u64 > max {
             return Err(CliError::Usage(format!(
@@ -2303,8 +2336,8 @@ mod retry_policy_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_query_cursor, create_response_with_id_if_accepted, extract_relay_response_field,
-        BuzzClient,
+        advance_query_cursor, build_imeta_tag, create_response_with_id_if_accepted,
+        extract_relay_response_field, upload_mime_for_path, BlobDescriptor, BuzzClient,
     };
     use nostr::{EventBuilder, Keys, Kind, Tag};
 
@@ -2494,6 +2527,59 @@ mod tests {
         assert!(
             built.headers().get("x-auth-tag").is_none(),
             "x-auth-tag header must not be present when no auth tag is configured"
+        );
+    }
+
+    #[test]
+    fn upload_mime_uses_closed_document_extensions_for_plain_text() {
+        assert_eq!(upload_mime_for_path("notes.md", b"# Notes\n"), "text/plain");
+        assert_eq!(
+            upload_mime_for_path("notes.markdown", b"# Notes\n"),
+            "text/plain"
+        );
+        assert_eq!(
+            upload_mime_for_path("notes.txt", b"plain text\n"),
+            "text/plain"
+        );
+        assert_eq!(upload_mime_for_path("rows.csv", b"a,b\n1,2\n"), "text/csv");
+        assert_eq!(
+            upload_mime_for_path("unknown.bin", b"plain text\n"),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn upload_mime_prefers_magic_bytes_for_pdf() {
+        assert_eq!(
+            upload_mime_for_path("document.pdf", b"%PDF-1.7\n"),
+            "application/pdf"
+        );
+    }
+
+    #[test]
+    fn imeta_keeps_a_document_filename_for_desktop_file_cards() {
+        let descriptor = BlobDescriptor {
+            url: "https://relay.test/media/aaaaaaaa.pdf".into(),
+            sha256: "a".repeat(64),
+            size: 2048,
+            mime_type: "application/pdf".into(),
+            uploaded: 0,
+            dim: None,
+            blurhash: None,
+            thumb: None,
+            duration: None,
+        };
+
+        assert_eq!(
+            build_imeta_tag(&descriptor, "Q3-budget.pdf"),
+            vec![
+                "imeta",
+                "url https://relay.test/media/aaaaaaaa.pdf",
+                "m application/pdf",
+                &format!("x {}", "a".repeat(64)),
+                "size 2048",
+                "filename Q3-budget.pdf",
+            ]
         );
     }
 }

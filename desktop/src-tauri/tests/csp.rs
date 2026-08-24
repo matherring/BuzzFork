@@ -166,6 +166,17 @@ fn media_directives_allow_the_buzz_media_scheme() {
 }
 
 #[test]
+fn frame_src_allows_only_app_local_and_in_memory_document_previews() {
+    // `DocumentViewerPane` frames locally-created PDF blobs. Vite preview and
+    // browser mocks do not enforce Tauri's packaged CSP, so keep the narrow
+    // capability visible here rather than discovering it in a signed build.
+    assert_eq!(
+        sources("frame-src"),
+        vec!["'self'".to_owned(), "blob:".to_owned()]
+    );
+}
+
+#[test]
 fn connect_src_allows_ipc_and_cleartext_relays() {
     // `ipc:` / `http://ipc.localhost` carry every Tauri command. Cleartext
     // `http:`/`ws:` stay allowed because a relay URL is user-supplied and the

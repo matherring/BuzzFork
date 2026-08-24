@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Download, FileText } from "lucide-react";
+import { Download, Eye, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import { invokeTauri } from "@/shared/api/tauri";
@@ -19,45 +19,9 @@ function formatFileSize(bytes: number): string {
   return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${units[i]}`;
 }
 
-/**
- * File card for a generic (non-image, non-video) attachment: icon, filename,
- * size, and a download action.
- *
- * Downloads go through the native `download_file` Tauri command (HTTP inside
- * the app's tunnel + a save dialog), not a plain `<a download>` link. A bare
- * link navigates the webview to the blob URL, which escapes to the OS browser
- * and gets bounced to a corporate CDN interstitial ("browser not supported").
- * The native command mirrors the image-download path.
- */
-export function FileCard({
-  href,
-  filename,
-  size,
-}: {
-  href: string;
-  filename: string;
-  size?: number;
-}) {
-  const cardRef = React.useRef<HTMLButtonElement | null>(null);
-  const sizeLabel = size != null ? formatFileSize(size) : "";
-  useSmoothCorners(cardRef);
-
+function fileCardBody(filename: string, sizeLabel: string) {
   return (
-    <button
-      ref={cardRef}
-      type="button"
-      onClick={() => {
-        invokeTauri("download_file", { url: href, filename }).catch(
-          (err: unknown) => {
-            const msg = err instanceof Error ? err.message : "Download failed";
-            toast.error(msg);
-          },
-        );
-      }}
-      data-testid="file-card"
-      className="my-1 inline-flex max-w-sm items-center gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2 text-left no-underline transition-colors hover:bg-muted/70"
-      style={{ borderRadius: "1rem" }}
-    >
+    <>
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
         <FileText className="h-4 w-4" />
       </span>
@@ -71,7 +35,80 @@ export function FileCard({
           </span>
         ) : null}
       </span>
-      <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
-    </button>
+    </>
+  );
+}
+
+/**
+ * File card for a generic attachment. Previewable documents open in Buzz's
+ * right-side viewer; every card retains an explicit native download action.
+ */
+export function FileCard({
+  href,
+  filename,
+  onOpen,
+  size,
+}: {
+  href: string;
+  filename: string;
+  onOpen?: () => void;
+  size?: number;
+}) {
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const sizeLabel = size != null ? formatFileSize(size) : "";
+  useSmoothCorners(cardRef);
+
+  const download = React.useCallback(() => {
+    invokeTauri("download_file", { url: href, filename }).catch(
+      (err: unknown) => {
+        const message = err instanceof Error ? err.message : "Download failed";
+        toast.error(message);
+      },
+    );
+  }, [filename, href]);
+
+  if (!onOpen) {
+    return (
+      <button
+        type="button"
+        onClick={download}
+        data-testid="file-card"
+        className="my-1 inline-flex max-w-sm items-center gap-3 rounded-2xl border border-border/70 bg-muted/40 px-3 py-2 text-left no-underline transition-colors hover:bg-muted/70"
+        style={{ borderRadius: "1rem" }}
+      >
+        {fileCardBody(filename, sizeLabel)}
+        <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button>
+    );
+  }
+
+  return (
+    <div
+      ref={cardRef}
+      className="my-1 inline-flex max-w-sm items-stretch overflow-hidden rounded-2xl border border-border/70 bg-muted/40 no-underline"
+      data-testid="file-card"
+      style={{ borderRadius: "1rem" }}
+    >
+      <button
+        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/70"
+        data-testid="file-card-open"
+        onClick={onOpen}
+        title={`Open ${filename} in the document viewer`}
+        type="button"
+      >
+        {fileCardBody(filename, sizeLabel)}
+        <Eye className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button>
+      <button
+        aria-label={`Download ${filename}`}
+        className="flex w-10 shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+        data-testid="file-card-download"
+        onClick={download}
+        title={`Download ${filename}`}
+        type="button"
+      >
+        <Download className="h-4 w-4" />
+      </button>
+    </div>
   );
 }
