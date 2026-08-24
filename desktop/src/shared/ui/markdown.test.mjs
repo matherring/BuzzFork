@@ -545,6 +545,12 @@ const EVENT_HEX =
 
 function buzzDeepLinkUrlTransform(value, key) {
   if (key !== "href") return defaultUrlTransform(value);
+  if (
+    value.startsWith("buzz-local-document:") ||
+    value.startsWith("buzz-local-file:")
+  ) {
+    return value;
+  }
   if (isMessageLink(value)) return value;
   if (parseEntityLink(value).ok) return value;
   return defaultUrlTransform(value);
@@ -559,6 +565,20 @@ function renderMarkdown(content) {
     ),
   );
 }
+
+test("buzzDeepLinkUrlTransform: preserves local document href", () => {
+  const href = `buzz-local-document:${encodeURIComponent("/Users/adminmat/.buzz/REPORT.md")}`;
+  const html = renderMarkdown(`[Report](${href})`);
+  assert.match(html, /href="buzz-local-document:/);
+  assert.doesNotMatch(html, /href=""/);
+});
+
+test("buzzDeepLinkUrlTransform: preserves generic local file href", () => {
+  const href = `buzz-local-file:${encodeURIComponent("/Users/adminmat/Projects/notes.bin")}`;
+  const html = renderMarkdown(`[notes](${href})`);
+  assert.match(html, /href="buzz-local-file:/);
+  assert.doesNotMatch(html, /href=""/);
+});
 
 test("messageLinkUrlTransform: preserves buzz://message href", () => {
   const html = renderMarkdown(
