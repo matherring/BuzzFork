@@ -183,6 +183,12 @@ export function isInsideHiddenSpoiler(element: Element): boolean {
  */
 export function buzzDeepLinkUrlTransform(value: string, key: string): string {
   if (key !== "href") return defaultUrlTransform(value);
+  if (
+    value.startsWith("buzz-local-document:") ||
+    value.startsWith("buzz-local-file:")
+  ) {
+    return value;
+  }
   if (isMessageLink(value) || isChannelLink(value)) return value;
   if (parseEntityLink(value).ok) return value;
   return defaultUrlTransform(value);

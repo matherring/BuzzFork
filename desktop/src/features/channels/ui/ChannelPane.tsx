@@ -28,6 +28,11 @@ import { buildVideoReviewPresentationByMessageId } from "@/features/messages/lib
 import { isThreadReply } from "@/features/messages/lib/threading";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
+import { DocumentViewerPane } from "@/features/documents/DocumentViewerPane";
+import {
+  closeDocumentViewer,
+  useDocumentViewerRequest,
+} from "@/features/documents/localDocumentViewer";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
@@ -538,9 +543,11 @@ export const ChannelPane = React.memo(function ChannelPane({
       }),
     [agentSessionAgents, openAgentSessionPubkey, profilePanelPubkey, profiles],
   );
+  const documentViewerRequest = useDocumentViewerRequest();
   const hasSplitAuxiliaryPane =
     useSplitAuxiliaryPane &&
-    (channelManagementOpen ||
+    (Boolean(documentViewerRequest) ||
+      channelManagementOpen ||
       Boolean(threadHeadMessage) ||
       shouldShowThreadSkeleton ||
       Boolean(activeChannel && selectedAgent) ||
@@ -833,7 +840,15 @@ export const ChannelPane = React.memo(function ChannelPane({
        * frozen snapshot because the panel is fully prop-driven.
        */}
       <AnimatePresence onExitComplete={markExitComplete}>
-        {channelManagementOpen && activeChannel ? (
+        {documentViewerRequest ? (
+          wrapAux(
+            <DocumentViewerPane
+              onClose={closeDocumentViewer}
+              request={documentViewerRequest}
+            />,
+            "document-viewer-pane",
+          )
+        ) : channelManagementOpen && activeChannel ? (
           <ChannelManagementAuxiliaryPanel
             activeChannel={activeChannel}
             canResetThreadPanelWidth={canResetThreadPanelWidth}

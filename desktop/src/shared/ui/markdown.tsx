@@ -1262,6 +1262,9 @@ export function createMarkdownComponents(
 
     const label = getReactNodeText(children);
 
+    const localDocumentAnchor = renderLocalDocumentAnchor(href, children);
+    if (localDocumentAnchor) return localDocumentAnchor;
+
     // Classify verified agent/team snapshots before generic files.
     const snapshotCard = resolveSnapshotCard(
       href ? imetaByUrl?.get(href) : undefined,
@@ -1296,11 +1299,7 @@ export function createMarkdownComponents(
       href,
       label,
     );
-    if (card) {
-      return (
-        <FileCard href={card.href} filename={card.filename} size={card.size} />
-      );
-    }
+    if (card) return <DocumentFileCard card={card} />;
 
     // Keep Buzz channel/message navigation in-app.
     if (href) {
@@ -1421,6 +1420,15 @@ export function createMarkdownComponents(
       const code = rawCode.replace(/\n$/, "");
       const isFencedCodeBlock =
         typeof className === "string" && className.includes("language-");
+
+      const localDocumentCode = renderLocalDocumentCode({
+        children,
+        className,
+        code,
+        interactive,
+        isFencedCodeBlock,
+      });
+      if (localDocumentCode) return localDocumentCode;
 
       if (isFencedCodeBlock || rawCode.endsWith("\n") || code.includes("\n")) {
         const language = extractLanguage(className);
@@ -1687,7 +1695,7 @@ export function createMarkdownComponents(
  * sixteen instances ever exist. Module-stable maps mean cached markdown
  * element trees (see ./markdown/nodeCache.ts) never embed per-mount closures.
  */
-const MARKDOWN_COMPONENT_SCHEMA_VERSION = "8";
+const MARKDOWN_COMPONENT_SCHEMA_VERSION = "9";
 const markdownComponentsByVariant = new Map<string, MarkdownComponentSet>();
 
 type MarkdownComponentSet = { components: Components; variant: string };
@@ -1811,7 +1819,7 @@ function MarkdownInner({
     ],
   );
 
-  let processedContent = content;
+  let processedContent = prepareDocumentMarkdown(content, interactive);
 
   // Note: stripping the sentinel here is intentionally omitted. When
   // configNudge !== null, selectProseOrNudge() returns null — suppressing

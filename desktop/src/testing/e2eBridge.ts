@@ -11119,6 +11119,7 @@ export function maybeInstallE2eTauriMocks() {
       sourceUrl: null;
     };
   }> = [];
+  let mockDocumentRoots = ["/Users/adminmat/.buzz"];
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -13542,6 +13543,99 @@ export function maybeInstallE2eTauriMocks() {
         const response = await fetch((payload as { url: string }).url);
         if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
         return await response.arrayBuffer();
+      }
+      case "read_local_document": {
+        const { path } = payload as { path: string };
+        if (
+          !mockDocumentRoots.some(
+            (root) => path === root || path.startsWith(`${root}/`),
+          )
+        ) {
+          return {
+            status: "denied",
+            source: path,
+            reason: "outside_approved_roots",
+          };
+        }
+        const filename = path.split("/").at(-1) ?? "document.md";
+        const extension = filename.split(".").at(-1)?.toLowerCase() ?? "md";
+        const content =
+          extension === "csv"
+            ? "name,value\nanswer,42\n"
+            : "# Viewer heading\n\nOpened inside Buzz.\n";
+        return {
+          status: "ready",
+          source: path,
+          file_name: filename,
+          extension,
+          content,
+          bytes_total: content.length,
+          bytes_read: content.length,
+          line_count: content.split("\n").filter(Boolean).length,
+          truncated: false,
+        };
+      }
+      case "pick_document_root":
+        return "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts";
+      case "list_document_roots":
+        return [...mockDocumentRoots];
+      case "add_document_root": {
+        const { root } = payload as { root: string };
+        mockDocumentRoots = [...new Set([...mockDocumentRoots, root])].sort();
+        return [...mockDocumentRoots];
+      }
+      case "remove_document_root": {
+        const { root } = payload as { root: string };
+        mockDocumentRoots = mockDocumentRoots.filter(
+          (candidate) => candidate !== root,
+        );
+        return [...mockDocumentRoots];
+      }
+      case "open_local_document":
+      case "reveal_local_file": {
+        const { path } = payload as { path: string };
+        if (
+          !mockDocumentRoots.some(
+            (root) => path === root || path.startsWith(`${root}/`),
+          )
+        ) {
+          throw new Error(
+            "This file is outside the approved document folders.",
+          );
+        }
+        return null;
+      }
+      case "local_document_checksum":
+        return "a".repeat(64);
+      case "read_document_attachment": {
+        const { filename, url } = payload as {
+          filename: string;
+          url: string;
+        };
+        const extension = filename.split(".").at(-1)?.toLowerCase() ?? "txt";
+        if (extension === "pdf") {
+          const pdf = "%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+          return {
+            status: "pdf",
+            source: url,
+            file_name: filename,
+            extension,
+            content_base64: window.btoa(pdf),
+            bytes_total: pdf.length,
+          };
+        }
+        const content = "name,value\nanswer,42\n";
+        return {
+          status: "ready",
+          source: url,
+          file_name: filename,
+          extension,
+          content,
+          bytes_total: content.length,
+          bytes_read: content.length,
+          line_count: 2,
+          truncated: false,
+        };
       }
       case "fetch_snapshot_bytes": {
         // The real command fetches + validates a snapshot attachment in memory

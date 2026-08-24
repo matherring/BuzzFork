@@ -18,6 +18,7 @@ mod channel_window;
 mod channels;
 mod clipboard;
 mod dms;
+pub(crate) mod document_viewer;
 mod engrams;
 mod export_util;
 mod global_agent_config;
