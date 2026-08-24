@@ -93,6 +93,26 @@ scripts/              # Dev tooling
 
 ---
 
+## BuzzFork Build and Storage Process
+
+1. **Preflight disk floor.** No build, test-suite, or packaging step starts with less than 50 GiB free, and aborts if it would drop below it.
+2. **Worktree budget.** At most two BuzzFork worktrees besides the primary checkout: one implementation and one packaging/canary. Delete a worktree when its branch merges or its purpose ends.
+3. **No full `just ci` locally.** Local checks are scoped to touched crates or packages and run through the disk guard. GitHub Actions runs the broad gate; until that is verified, the only fallback is one full local gate immediately before a canary, behind the preflight.
+4. **Canary hygiene.** One canary at a time, built from the active worktree with a shared build directory; retain only the app bundle and remove intermediates after the verdict.
+5. **Docker is off-limits to build hygiene.** Production relay containers and volumes are never pruned, stopped, or modified as part of cleanup.
+
+Wrap every local build, test-suite, or packaging command with the disk guard. It checks the filesystem holding this checkout before launch and while the command runs, terminating the whole command process group if free space drops below 50 GiB:
+
+```bash
+. ./bin/activate-hermit
+python3 scripts/buzzfork_build_guard.py -- cargo test -p buzz-cli
+python3 scripts/buzzfork_build_guard.py --check-only
+```
+
+The guard is not a Docker cleanup tool and must never be used to justify pruning, stopping, or modifying Docker resources.
+
+---
+
 ## Getting Started
 
 ```bash
@@ -100,7 +120,7 @@ scripts/              # Dev tooling
 cp .env.example .env      # configure local environment
 just setup                # install deps, run migrations
 just relay                # start relay at ws://localhost:3000
-just ci                   # run before any PR
+just ci                   # broad CI recipe; BuzzFork agents do not run this locally
 ```
 
 See CONTRIBUTING.md for full setup details and dependency requirements.
@@ -109,9 +129,7 @@ See CONTRIBUTING.md for full setup details and dependency requirements.
 
 ## Quality Gates
 
-Run `just ci` before every PR — it runs repository-wide formatting, lint,
-and static checks; Rust, Tauri, desktop, and mobile tests; and desktop and web
-builds. Clippy passing does not mean fmt passes; run both.
+For BuzzFork agent work, the storage-safe process above governs local validation. Run scoped formatting, Clippy, and tests for only the touched crates or packages through the disk guard. GitHub Actions runs the broad `just ci`-equivalent gate. Clippy passing does not mean fmt passes; run both scoped checks.
 
 Run `just test` for integration tests if you touched `buzz-relay`,
 `buzz-db`, or `buzz-auth` — these require a running Postgres and Redis.
@@ -124,8 +142,7 @@ commit. **Pre-push hooks** run the repository-wide differential file-size gate,
 clippy (workspace + Tauri), desktop TypeScript typechecking (`tsc --noEmit`),
 and fast unit tests in parallel (Rust, desktop JS, Tauri Rust, mobile Flutter)
 — no overlap with pre-commit. Builds are CI-only. Run `just fix-all` to auto-fix
-all formatting in one shot. Run `just ci` for the full local gate. Run `just
-hooks` to re-install hooks after env changes. Each globbed pre-push lane is
+all formatting in one shot. Do not run `just ci` locally except for the explicitly permitted fallback in the BuzzFork process above. Run `just hooks` to re-install hooks after env changes. Each globbed pre-push lane is
 scoped to the branch's merge-base diff against `origin/main` (`git diff
 origin/main...HEAD`), matching CI's paths-filter — so a lane only fires when this
 branch actually changed a file it covers, never because `origin/main` moved.
