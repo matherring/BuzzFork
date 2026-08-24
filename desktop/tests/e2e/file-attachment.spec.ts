@@ -165,17 +165,20 @@ test("upload a file and see a FileCard in the timeline", async ({ page }) => {
   await page.getByTestId("send-message").click();
   await expect(page.getByText("Sending")).toHaveCount(0);
 
-  // A FileCard renders in the timeline: a button carrying the filename. It
-  // downloads via the native `download_file` command (HTTP inside the app's
-  // tunnel + save dialog), NOT a plain `<a download>` link — a bare link
-  // escapes the webview to the OS browser and hits a corporate CDN page.
+  // A FileCard renders in the timeline. Its primary action opens the Buzz
+  // viewer; its explicit Download action uses native `download_file` (HTTP
+  // inside the app's tunnel + save dialog), rather than a bare `<a download>`
+  // link that would escape the webview to the OS browser.
   const card = page.getByTestId("file-card").last();
   await expect(card).toBeVisible();
   await expectCornerRadiusPx(card, 16);
   await expectSmoothCorners(card);
   await expect(card).toContainText("quarterly-report.pdf");
 
-  await card.click();
+  await card.getByTestId("file-card-open").click();
+  await expect(page.getByTestId("document-viewer-content")).toBeVisible();
+
+  await card.getByTestId("file-card-download").click();
   await expect
     .poll(() =>
       page.evaluate(
@@ -524,7 +527,8 @@ for (const theme of ["buzz", "buzz-dark", "github-light", "github-dark"]) {
   });
 }
 
-test("forum posts emit a FileCard for generic attachments, not a broken image", async ({
+// Forums unsupported by product decision (Mat, 2026-08-24, buzz-extensions thread).
+test.skip("forum posts emit a FileCard for generic attachments, not a broken image", async ({
   page,
 }) => {
   // Regression guard for the ForumComposer bug: it used to hand-build content
@@ -548,13 +552,16 @@ test("forum posts emit a FileCard for generic attachments, not a broken image", 
   await page.getByTestId("send-message").click();
 
   // The post renders through the shared Markdown component as a FileCard —
-  // a button carrying the filename that downloads via the native
-  // `download_file` command — NOT an inline image and NOT a bare link.
+  // its primary action opens Buzz Preview, while its explicit download action
+  // uses native `download_file`, not an inline image or a bare link.
   const card = page.getByTestId("file-card");
   await expect(card).toBeVisible();
   await expect(card).toContainText("quarterly-report.pdf");
 
-  await card.click();
+  await card.getByTestId("file-card-open").click();
+  await expect(page.getByTestId("document-viewer-content")).toBeVisible();
+
+  await card.getByTestId("file-card-download").click();
   await expect
     .poll(() =>
       page.evaluate(
