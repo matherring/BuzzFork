@@ -2,19 +2,13 @@ import * as React from "react";
 import { AlertCircle, Download, FileText, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 
-import { DocumentRootSettingsPane } from "@/features/documents/DocumentRootSettingsPane";
 import type { DocumentViewerRequest } from "@/features/documents/localDocumentViewer";
 import { invokeTauri } from "@/shared/api/tauri";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
 
-export type DocumentDeniedReason =
-  | "hidden_path"
-  | "not_a_file"
-  | "outside_approved_roots"
-  | "sensitive_name"
-  | "untrusted_attachment_url";
+export type DocumentDeniedReason = "not_a_file" | "untrusted_attachment_url";
 
 export type DocumentIntegrityReason =
   | "hash_mismatch"
@@ -68,12 +62,7 @@ export type DocumentReadResult =
   | { status: "unsupported"; source: string; extension: string | null };
 
 const DENIED_MESSAGES: Record<DocumentDeniedReason, string> = {
-  hidden_path: "Hidden files and directories are not available in the viewer.",
   not_a_file: "This path does not identify a regular file.",
-  outside_approved_roots:
-    "This file is outside the locally approved document folders.",
-  sensitive_name:
-    "Files with sensitive credential or secret names are blocked.",
   untrusted_attachment_url:
     "This attachment URL is not a trusted media path on the active Buzz relay.",
 };
@@ -96,25 +85,44 @@ function formatBytes(bytes: number) {
 
 function failureMessage(
   result: Exclude<DocumentReadResult, { status: "ready" } | { status: "pdf" }>,
+  request: DocumentViewerRequest,
 ) {
+  const local = request.kind === "local";
   switch (result.status) {
     case "binary":
-      return "This file contains binary or non-UTF-8 data and cannot be displayed as text.";
+      return local
+        ? "This file is unreadable."
+        : "This file contains binary or non-UTF-8 data and cannot be displayed as text.";
     case "denied":
-      return DENIED_MESSAGES[result.reason];
+      return local
+        ? "This file is unreadable."
+        : DENIED_MESSAGES[result.reason];
     case "empty":
-      return "This document is empty.";
+      return local ? "This file is unreadable." : "This document is empty.";
     case "failed":
-      return "Buzz could not read this document.";
+      return local
+        ? "This file is unreadable."
+        : "Buzz could not read this document.";
     case "integrity":
-      return INTEGRITY_MESSAGES[result.reason];
+      return local
+        ? "This file's checksum does not match the SHA-256 recorded in its message."
+        : INTEGRITY_MESSAGES[result.reason];
     case "invalid_pdf":
-      return "This file has a .pdf name but is not a structurally complete PDF.";
+      return local
+        ? "This file is unreadable."
+        : "This file has a .pdf name but is not a structurally complete PDF.";
     case "missing":
-      return "This document no longer exists at the requested path.";
+      return local
+        ? "This file is missing."
+        : "This document no longer exists at the requested path.";
     case "oversized":
-      return `This document is ${formatBytes(result.bytes_total)}; the viewer limit is ${formatBytes(result.max_bytes)}.`;
+      return local
+        ? "This file is unreadable."
+        : `This document is ${formatBytes(result.bytes_total)}; the viewer limit is ${formatBytes(result.max_bytes)}.`;
     case "unsupported":
+      if (local) {
+        return "Buzz preview does not support this file type yet. Open it in its default app instead.";
+      }
       return result.extension
         ? `Files with the .${result.extension} extension are not supported in the viewer.`
         : "Files without a supported document extension are not available in the viewer.";
@@ -127,10 +135,7 @@ function displayContent(
   return { content: result.content, notice: null as string | null };
 }
 
-type DocumentPreviewRequest = Exclude<
-  DocumentViewerRequest,
-  { kind: "root-settings" }
->;
+type DocumentPreviewRequest = DocumentViewerRequest;
 
 function loadDocument(request: DocumentPreviewRequest) {
   if (request.kind === "local") {
@@ -173,9 +178,6 @@ export function DocumentViewerPane({
   onClose: () => void;
   request: DocumentViewerRequest;
 }) {
-  if (request.kind === "root-settings") {
-    return <DocumentRootSettingsPane onClose={onClose} />;
-  }
   return <DocumentPreviewPane onClose={onClose} request={request} />;
 }
 
@@ -189,6 +191,16 @@ function DocumentPreviewPane({
   const [reloadToken, setReloadToken] = React.useState(0);
   const [result, setResult] = React.useState<DocumentReadResult | null>(null);
   const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
 
   React.useEffect(() => {
     void reloadToken;
@@ -291,6 +303,7 @@ function DocumentPreviewPane({
         </Button>
         <Button
           aria-label="Close document viewer"
+          className="shrink-0"
           onClick={onClose}
           size="icon"
           type="button"
@@ -357,7 +370,7 @@ function DocumentPreviewPane({
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
           <AlertCircle className="h-6 w-6 text-muted-foreground" />
           <p className="max-w-sm text-sm text-muted-foreground">
-            {failureMessage(result)}
+            {failureMessage(result, request)}
           </p>
         </div>
       ) : null}

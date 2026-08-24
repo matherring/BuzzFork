@@ -608,9 +608,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::document_viewer::read_document_attachment,
             commands::document_viewer::read_local_document,
-            commands::document_viewer::choose_document_root,
-            commands::document_viewer::list_document_roots,
-            commands::document_viewer::remove_document_root,
             commands::document_viewer::open_local_document,
             commands::document_viewer::reveal_local_file,
             commands::document_viewer::local_document_checksum,

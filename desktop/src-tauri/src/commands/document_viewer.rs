@@ -4,10 +4,9 @@ use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager, State};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_state::AppState;
@@ -21,36 +20,6 @@ const MAX_DISPLAY_BYTES: usize = 256 * 1024;
 const MAX_TEXT_DOCUMENT_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PDF_DOCUMENT_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_DISPLAY_LINES: usize = 5_000;
-const DOCUMENT_ROOTS_SCHEMA_VERSION: u32 = 1;
-const DOCUMENT_ROOTS_STORE_FILE: &str = "document-viewer-roots.json";
-const SYSTEM_ROOTS: &[&str] = &[
-    "/Applications",
-    "/Library",
-    "/System",
-    "/bin",
-    "/etc",
-    "/opt",
-    "/private",
-    "/sbin",
-    "/usr",
-    "/var",
-];
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct DocumentRootsStore {
-    version: u32,
-    roots: Vec<String>,
-}
-
-impl Default for DocumentRootsStore {
-    fn default() -> Self {
-        Self {
-            version: DOCUMENT_ROOTS_SCHEMA_VERSION,
-            roots: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DocumentKind {
     Pdf,
@@ -69,10 +38,7 @@ impl DocumentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DocumentDeniedReason {
-    HiddenPath,
     NotAFile,
-    OutsideApprovedRoots,
-    SensitiveName,
     UntrustedAttachmentUrl,
 }
 
@@ -162,166 +128,6 @@ fn extension_for_path(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase)
-}
-
-fn has_hidden_component(path: &Path) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(|value| value.starts_with('.') && value != "." && value != "..")
-    })
-}
-
-fn is_sensitive_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    let stem = lower.split('.').next().unwrap_or(&lower);
-    matches!(
-        stem,
-        "auth"
-            | "credential"
-            | "credentials"
-            | "id_ed25519"
-            | "id_rsa"
-            | "private-key"
-            | "private_key"
-            | "secret"
-            | "secrets"
-            | "token"
-            | "tokens"
-    )
-}
-
-fn has_sensitive_name(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .is_none_or(is_sensitive_name)
-}
-
-fn has_sensitive_component(path: &Path) -> bool {
-    path.components().any(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .is_some_and(is_sensitive_name)
-    })
-}
-
-fn is_system_root(path: &Path) -> bool {
-    SYSTEM_ROOTS
-        .iter()
-        .map(Path::new)
-        .any(|system_root| path.starts_with(system_root))
-}
-
-/// Validate a directory that the local user selected in the native picker.
-///
-/// The renderer cannot grant access by supplying a pathname: this helper is
-/// used both after picker selection and before persistence. A canonical path
-/// prevents later symlink escapes, while rejecting a symlink *selection*
-/// prevents a misleading approval scope in the confirmation dialog.
-pub(crate) fn canonical_document_root(requested_root: &Path) -> Result<PathBuf, String> {
-    let metadata = fs::symlink_metadata(requested_root)
-        .map_err(|_| "The selected folder is no longer available.".to_string())?;
-    if metadata.file_type().is_symlink() {
-        return Err("Choose the real folder, not a symbolic link.".to_string());
-    }
-    if !metadata.is_dir() {
-        return Err("Choose a folder, not a file.".to_string());
-    }
-
-    let canonical = requested_root
-        .canonicalize()
-        .map_err(|_| "The selected folder could not be resolved safely.".to_string())?;
-    if canonical == Path::new("/") {
-        return Err("The filesystem root cannot be approved.".to_string());
-    }
-    if dirs::home_dir()
-        .and_then(|home| home.canonicalize().ok())
-        .is_some_and(|home| canonical == home)
-    {
-        return Err("Choose a specific folder inside your home directory.".to_string());
-    }
-    if is_system_root(&canonical) {
-        return Err("System folders cannot be approved for document access.".to_string());
-    }
-    if has_hidden_component(&canonical) {
-        return Err("Hidden folders cannot be approved for document access.".to_string());
-    }
-    if has_sensitive_component(&canonical) {
-        return Err("Sensitive folders cannot be approved for document access.".to_string());
-    }
-    Ok(canonical)
-}
-
-fn document_roots_store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("app data directory: {error}"))?
-        .join("documents");
-    if directory.exists() {
-        let metadata = fs::symlink_metadata(&directory)
-            .map_err(|error| format!("inspect document settings directory: {error}"))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err("document settings directory is not a safe directory".to_string());
-        }
-    } else {
-        fs::create_dir_all(&directory)
-            .map_err(|error| format!("create document settings directory: {error}"))?;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("restrict document settings directory: {error}"))?;
-    }
-    Ok(directory.join(DOCUMENT_ROOTS_STORE_FILE))
-}
-
-fn load_document_roots_store(app: &AppHandle) -> Result<DocumentRootsStore, String> {
-    let store_path = document_roots_store_path(app)?;
-    if !store_path.exists() {
-        return Ok(DocumentRootsStore::default());
-    }
-    let bytes =
-        fs::read(&store_path).map_err(|error| format!("read document-root settings: {error}"))?;
-    let store: DocumentRootsStore = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse document-root settings: {error}"))?;
-    if store.version != DOCUMENT_ROOTS_SCHEMA_VERSION {
-        return Err("document-root settings use an unsupported version".to_string());
-    }
-    Ok(store)
-}
-
-fn load_document_roots(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
-    let store = load_document_roots_store(app)?;
-    store
-        .roots
-        .iter()
-        .map(|root| canonical_document_root(Path::new(root)))
-        .collect()
-}
-
-fn save_document_roots(app: &AppHandle, roots: Vec<PathBuf>) -> Result<Vec<String>, String> {
-    let mut canonical_roots = roots
-        .iter()
-        .map(|root| canonical_document_root(root))
-        .collect::<Result<Vec<_>, _>>()?;
-    canonical_roots.sort();
-    canonical_roots.dedup();
-    let roots = canonical_roots
-        .iter()
-        .map(|root| root.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    let payload = serde_json::to_vec_pretty(&DocumentRootsStore {
-        version: DOCUMENT_ROOTS_SCHEMA_VERSION,
-        roots: roots.clone(),
-    })
-    .map_err(|error| format!("serialize document-root settings: {error}"))?;
-    let store_path = document_roots_store_path(app)?;
-    crate::managed_agents::atomic_write_json_restricted(&store_path, &payload)?;
-    Ok(roots)
 }
 
 fn utf8_prefix(bytes: &[u8], limit: usize) -> Result<&str, ()> {
@@ -419,42 +225,23 @@ fn read_document_bytes(
     }
 }
 
-fn resolve_local_file_with_roots(
+fn resolve_local_file(
     requested_path: &Path,
-    allowed_roots: &[PathBuf],
 ) -> Result<(PathBuf, fs::Metadata), DocumentReadResult> {
     let requested_source = source_for_path(requested_path);
     let canonical_path = match requested_path.canonicalize() {
         Ok(path) => path,
-        Err(_) => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(DocumentReadResult::Missing {
                 source: requested_source,
             });
         }
+        Err(_) => {
+            return Err(DocumentReadResult::Failed {
+                source: requested_source,
+            });
+        }
     };
-    let Some(canonical_root) = allowed_roots.iter().find_map(|root| {
-        root.canonicalize()
-            .ok()
-            .filter(|canonical_root| canonical_path.starts_with(canonical_root))
-    }) else {
-        return Err(denied(
-            requested_source,
-            DocumentDeniedReason::OutsideApprovedRoots,
-        ));
-    };
-    let relative_path = canonical_path
-        .strip_prefix(&canonical_root)
-        .unwrap_or(&canonical_path);
-    if has_hidden_component(relative_path) {
-        return Err(denied(requested_source, DocumentDeniedReason::HiddenPath));
-    }
-    if has_sensitive_name(&canonical_path) {
-        return Err(denied(
-            requested_source,
-            DocumentDeniedReason::SensitiveName,
-        ));
-    }
-
     let metadata = match fs::metadata(&canonical_path) {
         Ok(metadata) => metadata,
         Err(_) => {
@@ -474,9 +261,7 @@ fn verify_expected_hash(
     expected_sha256: Option<&str>,
     bytes: &[u8],
 ) -> Option<DocumentReadResult> {
-    let Some(expected_sha256) = expected_sha256.filter(|value| !value.is_empty()) else {
-        return None;
-    };
+    let expected_sha256 = expected_sha256.filter(|value| !value.is_empty())?;
     if expected_sha256.len() != 64
         || !expected_sha256
             .chars()
@@ -499,15 +284,13 @@ fn verify_expected_hash(
 
 pub(crate) fn read_local_document_with_expected_hash(
     requested_path: &Path,
-    allowed_roots: &[PathBuf],
     expected_sha256: Option<&str>,
 ) -> DocumentReadResult {
     let requested_source = source_for_path(requested_path);
-    let (canonical_path, metadata) =
-        match resolve_local_file_with_roots(requested_path, allowed_roots) {
-            Ok(result) => result,
-            Err(result) => return result,
-        };
+    let (canonical_path, metadata) = match resolve_local_file(requested_path) {
+        Ok(result) => result,
+        Err(result) => return result,
+    };
 
     let extension = extension_for_path(&canonical_path);
     let Some(kind) = document_kind_for_extension(extension.as_deref()) else {
@@ -549,14 +332,6 @@ pub(crate) fn read_local_document_with_expected_hash(
         extension.unwrap_or_default(),
         &bytes,
     )
-}
-
-#[cfg(test)]
-pub(crate) fn read_local_document_with_roots(
-    requested_path: &Path,
-    allowed_roots: &[PathBuf],
-) -> DocumentReadResult {
-    read_local_document_with_expected_hash(requested_path, allowed_roots, None)
 }
 
 pub(crate) fn verify_attachment_bytes(
@@ -616,83 +391,52 @@ pub(crate) fn verify_attachment_bytes(
 pub(crate) fn read_local_document(
     path: String,
     expected_sha256: Option<String>,
-    app: AppHandle,
 ) -> DocumentReadResult {
-    let allowed_roots = load_document_roots(&app).unwrap_or_default();
-    read_local_document_with_expected_hash(
-        Path::new(&path),
-        &allowed_roots,
-        expected_sha256.as_deref(),
-    )
+    read_local_document_with_expected_hash(Path::new(&path), expected_sha256.as_deref())
 }
 
-/// Let the native picker and native confirmation dialog establish a new root.
-///
-/// This deliberately accepts no renderer-provided path: a message author can
-/// control card text, and the renderer is not a permission authority. The
-/// selected canonical directory is shown in the trusted dialog before it is
-/// persisted, so cancellation leaves the root store untouched.
-#[tauri::command]
-pub(crate) async fn choose_document_root(app: AppHandle) -> Result<Option<Vec<String>>, String> {
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog().file().pick_folder(move |path| {
-        let _ = sender.send(path);
-    });
-    let selected = receiver
-        .await
-        .map_err(|_| "folder picker closed unexpectedly".to_string())?;
-    let Some(selected) = selected else {
-        return Ok(None);
-    };
-    let path = selected
-        .as_path()
-        .ok_or_else(|| "the selected folder path is invalid".to_string())?;
-    let canonical = canonical_document_root(path)?;
-    let canonical_scope = canonical.to_string_lossy().into_owned();
-
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .message(format!(
-            "Allow Buzz to read local files under:\n\n{canonical_scope}\n\n\
-             Buzz will not upload those files. You can revoke this folder in Document access settings."
-        ))
-        .title("Approve document folder?")
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Approve".into(),
-            "Cancel".into(),
-        ))
-        .show(move |approved| {
-            let _ = sender.send(approved);
-        });
-    let approved = receiver
-        .await
-        .map_err(|_| "folder approval closed unexpectedly".to_string())?;
-    if !approved {
-        return Ok(None);
+fn local_file_action_error(result: DocumentReadResult) -> String {
+    match result {
+        DocumentReadResult::Missing { .. } => "This file is missing.".to_string(),
+        DocumentReadResult::Denied {
+            reason: DocumentDeniedReason::NotAFile,
+            ..
+        } => "This file is unreadable.".to_string(),
+        _ => "This file is unreadable.".to_string(),
     }
-
-    let mut roots = load_document_roots(&app)?;
-    roots.push(canonical);
-    save_document_roots(&app, roots).map(Some)
 }
 
-#[tauri::command]
-pub(crate) fn list_document_roots(app: AppHandle) -> Result<Vec<String>, String> {
-    load_document_roots_store(&app).map(|store| store.roots)
+fn sha256_for_file(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|_| "This file is unreadable.".to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "This file is unreadable.".to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
-#[tauri::command]
-pub(crate) fn remove_document_root(root: String, app: AppHandle) -> Result<Vec<String>, String> {
-    let mut store = load_document_roots_store(&app)?;
-    store.roots.retain(|existing| existing != &root);
-    store.roots.sort();
-    store.roots.dedup();
-    let payload = serde_json::to_vec_pretty(&store)
-        .map_err(|error| format!("serialize document-root settings: {error}"))?;
-    let store_path = document_roots_store_path(&app)?;
-    crate::managed_agents::atomic_write_json_restricted(&store_path, &payload)?;
-    Ok(store.roots)
+fn verify_local_file_checksum(path: &Path, expected_sha256: Option<&str>) -> Result<(), String> {
+    let Some(expected_sha256) = expected_sha256.filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        || sha256_for_file(path)? != expected_sha256.to_ascii_lowercase()
+    {
+        return Err(
+            "This file's checksum does not match the SHA-256 recorded in its message.".to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -701,50 +445,28 @@ pub(crate) fn open_local_document(
     expected_sha256: Option<String>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let allowed_roots = load_document_roots(&app)?;
-    match read_local_document_with_expected_hash(
-        Path::new(&path),
-        &allowed_roots,
-        expected_sha256.as_deref(),
-    ) {
-        DocumentReadResult::Pdf { .. } | DocumentReadResult::Ready { .. } => {
-            let (canonical_path, _) =
-                resolve_local_file_with_roots(Path::new(&path), &allowed_roots)
-                    .map_err(|_| "This document is no longer available for opening.".to_string())?;
-            app.opener()
-                .open_path(canonical_path.to_string_lossy(), None::<&str>)
-                .map_err(|error| format!("open document: {error}"))
-        }
-        _ => Err("This file did not pass Buzz's local-document safety checks.".to_string()),
-    }
+    let (canonical_path, _) =
+        resolve_local_file(Path::new(&path)).map_err(local_file_action_error)?;
+    verify_local_file_checksum(&canonical_path, expected_sha256.as_deref())?;
+    app.opener()
+        .open_path(canonical_path.to_string_lossy(), None::<&str>)
+        .map_err(|error| format!("open file: {error}"))
 }
 
 #[tauri::command]
 pub(crate) fn reveal_local_file(path: String, app: AppHandle) -> Result<(), String> {
-    let allowed_roots = load_document_roots(&app)?;
-    let (canonical_path, _) = resolve_local_file_with_roots(Path::new(&path), &allowed_roots)
-        .map_err(|_| "This file is outside the approved document folders.".to_string())?;
+    let (canonical_path, _) =
+        resolve_local_file(Path::new(&path)).map_err(local_file_action_error)?;
     app.opener()
         .reveal_item_in_dir(&canonical_path)
-        .map_err(|error| format!("reveal document: {error}"))
+        .map_err(|error| format!("reveal file: {error}"))
 }
 
 #[tauri::command]
-pub(crate) fn local_document_checksum(path: String, app: AppHandle) -> Result<String, String> {
-    let allowed_roots = load_document_roots(&app)?;
-    let (canonical_path, metadata) =
-        resolve_local_file_with_roots(Path::new(&path), &allowed_roots)
-            .map_err(|_| "This file is outside the approved document folders.".to_string())?;
-    let extension = extension_for_path(&canonical_path);
-    let Some(kind) = document_kind_for_extension(extension.as_deref()) else {
-        return Err("Checksums are available only for supported local document types.".to_string());
-    };
-    if metadata.len() > kind.max_bytes() {
-        return Err("This document exceeds Buzz's safe checksum size limit.".to_string());
-    }
-    let bytes =
-        fs::read(&canonical_path).map_err(|error| format!("read document checksum: {error}"))?;
-    Ok(hex::encode(Sha256::digest(bytes)))
+pub(crate) fn local_document_checksum(path: String) -> Result<String, String> {
+    let (canonical_path, _) =
+        resolve_local_file(Path::new(&path)).map_err(local_file_action_error)?;
+    sha256_for_file(&canonical_path)
 }
 
 async fn read_document_attachment_inner(

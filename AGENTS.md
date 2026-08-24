@@ -74,6 +74,29 @@ scripts/              # Dev tooling
 
 ---
 
+## BuzzFork Build and Storage Process
+
+1. **Preflight disk floor.** No build, test-suite, or packaging step starts with less than 50 GiB free, and aborts if it would drop below it. Deterministic script, Woz owns it, both agents call it.
+2. **Worktree budget.** At most two BuzzFork worktrees besides the primary checkout: one implementation, one packaging/canary. Deleting a worktree when its branch merges or its purpose ends is part of finishing the task, not a separate cleanup project.
+3. **No full `just ci` locally.** Local checks are scoped to what changed (fmt/clippy/tests for the touched crates/packages). The broad gate runs on GitHub Actions against the pushed branch — `origin` is matherring/BuzzFork and `ci.yml` exists. Woz: verify Actions actually runs on the fork before relying on it; until verified, fallback is one full local gate only, immediately before a canary, behind the preflight. Branch pushes to the fork for CI purposes need no sign-off; merges keep the existing Woz sign-off lane.
+4. **Canary hygiene.** One canary at a time, built from the active worktree with a shared build directory; copy out only the app bundle, delete intermediates after packaging, delete the bundle after its accept/fail verdict.
+5. **Docker is off-limits to build hygiene.** buzz-prod containers and volumes are the production relay. Never pruned, stopped, or modified as part of cleanup.
+
+Wrap every local build, test-suite, or packaging command with the disk guard. It checks the
+filesystem holding this checkout before launch and while the command runs, terminating the whole
+command process group if free space drops below 50 GiB:
+
+```bash
+. ./bin/activate-hermit
+python3 scripts/buzzfork_build_guard.py -- cargo test -p buzz-cli
+python3 scripts/buzzfork_build_guard.py --check-only
+```
+
+The guard is not a Docker cleanup tool and must never be used to justify pruning, stopping, or
+modifying Docker resources.
+
+---
+
 ## Getting Started
 
 ```bash
@@ -81,7 +104,7 @@ scripts/              # Dev tooling
 cp .env.example .env      # configure local environment
 just setup                # install deps, run migrations
 just relay                # start relay at ws://localhost:3000
-just ci                   # run before any PR
+just ci                   # broad CI recipe; BuzzFork agents do not run this locally
 ```
 
 See CONTRIBUTING.md for full setup details and dependency requirements.
@@ -90,8 +113,10 @@ See CONTRIBUTING.md for full setup details and dependency requirements.
 
 ## Quality Gates
 
-Run `just ci` before every PR — it runs `fmt` + `clippy` + desktop lint +
-unit tests + builds. Clippy passing does not mean fmt passes; run both.
+For BuzzFork agent work, the storage-safe process above governs local validation. Run scoped
+formatting, Clippy, and tests for only the touched crates or packages through the disk guard.
+GitHub Actions runs the broad `just ci`-equivalent gate. Clippy passing does not mean fmt passes;
+run both scoped checks.
 
 Run `just test` for integration tests if you touched `buzz-relay`,
 `buzz-db`, or `buzz-auth` — these require a running Postgres and Redis.
@@ -103,8 +128,8 @@ Auto-fixable issues are fixed and re-staged; unfixable lint issues block the
 commit. **Pre-push hooks** run clippy (workspace + Tauri), desktop TypeScript
 typechecking (`tsc --noEmit`), and fast unit tests in parallel (Rust, desktop
 JS, Tauri Rust, mobile Flutter) — no overlap with pre-commit. Builds are
-CI-only. Run `just fix-all` to auto-fix all formatting in one shot. Run
-`just ci` for the full local gate. Run `just hooks` to
+CI-only. Run `just fix-all` to auto-fix all formatting in one shot. Do not run
+`just ci` locally except for the explicitly permitted fallback in the BuzzFork process above. Run `just hooks` to
 re-install hooks after env changes. Before agents run Git or hooks, activate the
 repo's Hermit environment (`. ./bin/activate-hermit`); do not rewrite hook
 commands to compensate for an unconfigured shell `PATH`.
