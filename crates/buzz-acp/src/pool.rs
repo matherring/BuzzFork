@@ -46,6 +46,8 @@ use crate::relay::{ChannelInfo, RestClient};
 /// the turn as "recently active" (eligible for requeue instead of dead-letter).
 const RECENT_ACTIVITY_WINDOW: Duration = Duration::from_secs(60);
 
+const FINAL_TEXT_REPLY_SUBMIT_TIMEOUT: Duration = Duration::from_secs(5);
+
 // FlushBatch and BatchEvent derive Clone (added in queue.rs) so we can store
 // a recoverable copy in TaskMeta for panic recovery in Queue mode.
 
@@ -641,6 +643,9 @@ pub struct PromptContext {
     /// the desktop keys per (agent, relay) pair, e.g. `session_config_captured`,
     /// mirroring the `managed_agent_runtime_lifecycle` frames.
     pub relay_url: String,
+    /// Whether the configured ACP adapter is allowlisted to rely on harness
+    /// publication of its final text instead of posting through `buzz` itself.
+    pub final_text_fallback_enabled: bool,
 }
 
 impl AgentPool {
@@ -2416,6 +2421,9 @@ pub async fn run_prompt_task(
             .collect(),
         None => prompt_sections.iter().map(String::as_str).collect(),
     };
+    agent
+        .acp
+        .set_final_text_capture(ctx.final_text_fallback_enabled && batch.is_some());
     let prompt_bytes: usize = prompt_blocks.iter().map(|block| block.len()).sum();
     let has_standing_context = match &source {
         PromptSource::Channel(_) => !standing.sections().is_empty(),
@@ -2619,6 +2627,14 @@ pub async fn run_prompt_task(
                             Some(buzz_core::agent_turn_metric::StopReason::EndTurn),
                         )
                         .await;
+                        if ctx.final_text_fallback_enabled {
+                            publish_final_text_reply(
+                                &ctx.rest_client,
+                                batch.as_ref(),
+                                agent.acp.take_final_text(),
+                            )
+                            .await;
+                        }
                         send_prompt_result(
                             &result_tx,
                             &turn_id,
@@ -2693,6 +2709,17 @@ pub async fn run_prompt_task(
                 Some(core_stop),
             )
             .await;
+
+            if ctx.final_text_fallback_enabled
+                && matches!(&stop_reason, StopReason::EndTurn | StopReason::Refusal)
+            {
+                publish_final_text_reply(
+                    &ctx.rest_client,
+                    batch.as_ref(),
+                    agent.acp.take_final_text(),
+                )
+                .await;
+            }
 
             send_prompt_result(
                 &result_tx,
@@ -4088,6 +4115,84 @@ fn record_channel_delivery_success(
         standing_context_sent,
         event_ids.iter().cloned(),
     );
+}
+
+/// Publish ACP final text for adapters that cannot post through `buzz`.
+///
+/// The harness owns the relay signer, while some ACP adapters deliberately
+/// isolate their tool subprocess environment from Buzz credentials. We retain
+/// the agent's `agent_message_chunk` text in [`AcpClient`] and publish it here
+/// only after a normal terminal turn. The adapter allowlist is the deduplication
+/// boundary: adapters that can post through the CLI do not capture or submit
+/// final text, so no reply-tag convention can cause a duplicate.
+async fn publish_final_text_reply(
+    rest: &RestClient,
+    batch: Option<&FlushBatch>,
+    final_text: Option<String>,
+) {
+    let (Some(batch), Some(final_text)) = (batch, final_text) else {
+        return;
+    };
+    let Some(triggering_event) = batch.events.last().map(|event| &event.event) else {
+        return;
+    };
+
+    let trigger_id = triggering_event.id.to_hex();
+    let thread_tags = crate::queue::parse_thread_tags(triggering_event);
+    let root_event_id = thread_tags
+        .root_event_id
+        .as_deref()
+        .and_then(|id| nostr::EventId::from_hex(id).ok())
+        .unwrap_or(triggering_event.id);
+    let thread_ref = buzz_sdk::ThreadRef {
+        root_event_id,
+        parent_event_id: triggering_event.id,
+    };
+    let builder = match buzz_sdk::build_message(
+        batch.channel_id,
+        &final_text,
+        Some(&thread_ref),
+        &[],
+        false,
+        &[],
+    ) {
+        Ok(builder) => builder,
+        Err(error) => {
+            tracing::warn!(
+                channel = %batch.channel_id,
+                "could not build ACP final-text fallback reply: {error}"
+            );
+            return;
+        }
+    };
+    let event = match builder.sign_with_keys(&rest.keys) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(
+                channel = %batch.channel_id,
+                "could not sign ACP final-text fallback reply: {error}"
+            );
+            return;
+        }
+    };
+    match timeout(FINAL_TEXT_REPLY_SUBMIT_TIMEOUT, rest.submit_event(&event)).await {
+        Ok(Ok(_)) => tracing::info!(
+            channel = %batch.channel_id,
+            trigger = %trigger_id,
+            "published ACP final-text fallback reply"
+        ),
+        Ok(Err(error)) => tracing::warn!(
+            channel = %batch.channel_id,
+            trigger = %trigger_id,
+            "ACP final-text fallback reply failed: {error}"
+        ),
+        Err(_) => tracing::warn!(
+            channel = %batch.channel_id,
+            trigger = %trigger_id,
+            timeout_ms = FINAL_TEXT_REPLY_SUBMIT_TIMEOUT.as_millis() as u64,
+            "ACP final-text fallback reply timed out"
+        ),
+    }
 }
 
 //
