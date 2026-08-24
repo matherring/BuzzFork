@@ -18,6 +18,45 @@ export type MediaContextMenuItem = {
   onSelect: () => void;
 };
 
+const VIEWPORT_MARGIN_PX = 8;
+
+type MenuSize = {
+  height: number;
+  width: number;
+};
+
+type ViewportSize = {
+  height: number;
+  width: number;
+};
+
+/**
+ * Keeps a portal menu's complete interactive surface within the viewport.
+ *
+ * Menus are positioned from a pointer or trigger edge, which can legitimately
+ * be near the bottom or right edge of a transcript. Clamping after the menu is
+ * measured prevents its lower actions from becoming unreachable.
+ */
+export function clampMediaContextMenuPosition(
+  position: MediaContextMenuPosition,
+  menu: MenuSize,
+  viewport: ViewportSize,
+): MediaContextMenuPosition {
+  const maxX = Math.max(
+    VIEWPORT_MARGIN_PX,
+    viewport.width - menu.width - VIEWPORT_MARGIN_PX,
+  );
+  const maxY = Math.max(
+    VIEWPORT_MARGIN_PX,
+    viewport.height - menu.height - VIEWPORT_MARGIN_PX,
+  );
+
+  return {
+    x: Math.min(Math.max(position.x, VIEWPORT_MARGIN_PX), maxX),
+    y: Math.min(Math.max(position.y, VIEWPORT_MARGIN_PX), maxY),
+  };
+}
+
 /**
  * Dismiss listeners for a custom right-click menu.
  *
@@ -80,12 +119,38 @@ export function MediaContextMenu({
   portalContainer?: Element;
   position: MediaContextMenuPosition;
 }) {
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  const [placedPosition, setPlacedPosition] = React.useState(position);
+
+  React.useLayoutEffect(() => {
+    const placeMenu = () => {
+      const menu = menuRef.current;
+      if (!menu) return;
+
+      const bounds = menu.getBoundingClientRect();
+      const nextPosition = clampMediaContextMenuPosition(
+        position,
+        { height: bounds.height, width: bounds.width },
+        { height: window.innerHeight, width: window.innerWidth },
+      );
+      setPlacedPosition((current) =>
+        current.x === nextPosition.x && current.y === nextPosition.y
+          ? current
+          : nextPosition,
+      );
+    };
+
+    placeMenu();
+    window.addEventListener("resize", placeMenu);
+    return () => window.removeEventListener("resize", placeMenu);
+  }, [position]);
+
   const itemClass =
     "flex min-h-9 w-full cursor-default select-none items-center rounded-lg py-2 pl-2 pr-4 text-sm outline-hidden hover:bg-muted/50 hover:text-foreground";
   return createPortal(
     <div
       className={cn(
-        "fixed z-[100] min-w-60 origin-top-left rounded-xl p-1 slide-in-from-top-1",
+        "fixed z-[100] w-max origin-top-left overflow-y-auto rounded-xl p-1 slide-in-from-top-1",
         POPOVER_CUSTOM_ENTER_MOTION_CLASS,
         POPOVER_SURFACE_CLASS,
       )}
@@ -93,7 +158,15 @@ export function MediaContextMenu({
       {...Object.fromEntries(
         (dataAttributes ?? []).map((attribute) => [attribute, ""]),
       )}
-      style={{ ...POPOVER_SHADOW_STYLE, left: position.x, top: position.y }}
+      ref={menuRef}
+      style={{
+        ...POPOVER_SHADOW_STYLE,
+        left: placedPosition.x,
+        maxHeight: `calc(100vh - ${VIEWPORT_MARGIN_PX * 2}px)`,
+        maxWidth: `calc(100vw - ${VIEWPORT_MARGIN_PX * 2}px)`,
+        minWidth: `min(15rem, calc(100vw - ${VIEWPORT_MARGIN_PX * 2}px))`,
+        top: placedPosition.y,
+      }}
     >
       {items.map((item) => (
         <button

@@ -146,6 +146,22 @@ test("approves a document folder through the backend-owned picker flow", async (
 
   const card = localFileCard(page, "REPORT.md");
   await card.getByTestId("local-file-card-menu").click();
+  const menu = page.locator("[data-local-file-context-menu]");
+  await expect(menu).toBeVisible();
+  await expect
+    .poll(() =>
+      menu.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        const margin = 8;
+        return (
+          bounds.left >= margin &&
+          bounds.top >= margin &&
+          bounds.right <= window.innerWidth - margin &&
+          bounds.bottom <= window.innerHeight - margin
+        );
+      }),
+    )
+    .toBe(true);
   await page.getByRole("button", { name: "Choose approved folder…" }).click();
 
   await expect
