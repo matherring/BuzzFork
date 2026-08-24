@@ -55,16 +55,18 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId("chat-title")).toHaveText("general");
 });
 
-test("uses the native default-app command for a local Markdown card", async ({
+test("uses the native default-app command for a local DOCX card", async ({
   page,
 }) => {
-  const path = "/Users/adminmat/.buzz/RESEARCH/REPORT.md";
+  const path =
+    "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts/REPORT.docx";
   await emitMessage(page, {
     channelName: "general",
     content: `Open ${path}.`,
   });
 
-  const card = localFileCard(page, "REPORT.md");
+  const card = localFileCard(page, "REPORT.docx");
+  await expect(card).toContainText("opens in default app");
   await card.getByTestId("local-file-card-open").click();
 
   await expect
@@ -80,7 +82,7 @@ test("uses the native default-app command for a local Markdown card", async ({
 test("opens a local Markdown preview from the explicit card menu action", async ({
   page,
 }) => {
-  const path = "/Users/adminmat/.buzz/RESEARCH/REPORT.md";
+  const path = "/Users/adminmat/Projects/business-ops/drafts/REPORT.md";
   await emitMessage(page, {
     channelName: "general",
     content: `Open ${path}.`,
@@ -88,7 +90,7 @@ test("opens a local Markdown preview from the explicit card menu action", async 
 
   const card = localFileCard(page, "REPORT.md");
   await card.getByTestId("local-file-card-menu").click();
-  await page.getByRole("button", { name: "Preview in Buzz" }).click();
+  await page.getByRole("button", { name: "Open in Buzz Preview" }).click();
 
   await expect(page.getByTestId("document-viewer-content")).toBeVisible();
   await expect(page.getByTestId("document-viewer-markdown")).toContainText(
@@ -100,21 +102,41 @@ test("opens a local Markdown preview from the explicit card menu action", async 
   await expect(page.getByTestId("document-viewer-content")).toBeHidden();
 });
 
-test("shows an explicit denial for a local path outside the approved root", async ({
-  page,
-}) => {
-  const path = "/Users/adminmat/.codex/NOTES.txt";
+test("previews a local PDF without setup", async ({ page }) => {
+  const path =
+    "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts/REPORT.pdf";
   await emitMessage(page, {
     channelName: "general",
     content: `Open ${path}.`,
   });
 
-  const card = localFileCard(page, "NOTES.txt");
+  const card = localFileCard(page, "REPORT.pdf");
   await card.getByTestId("local-file-card-menu").click();
-  await page.getByRole("button", { name: "Preview in Buzz" }).click();
+  await page.getByRole("button", { name: "Open in Buzz Preview" }).click();
+
+  await expect(page.getByTestId("document-viewer-pdf")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Close document viewer" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("document-viewer-content")).toBeHidden();
+});
+
+test("explains that local DOCX preview is not available yet", async ({
+  page,
+}) => {
+  const path = "/Users/adminmat/Projects/business-ops/drafts/REPORT.docx";
+  await emitMessage(page, {
+    channelName: "general",
+    content: `Open ${path}.`,
+  });
+
+  const card = localFileCard(page, "REPORT.docx");
+  await card.getByTestId("local-file-card-menu").click();
+  await page.getByRole("button", { name: "Open in Buzz Preview" }).click();
 
   await expect(page.getByTestId("document-viewer-content")).toContainText(
-    "outside the locally approved document folders",
+    "Buzz preview does not support this file type yet. Open it in its default app instead.",
   );
 });
 
@@ -125,58 +147,22 @@ test("renders a local-file card without reading the path", async ({ page }) => {
     content: `Keep ${path} for later.`,
   });
 
-  await expect(localFileCard(page, "archive.zip")).toContainText("Reveal only");
+  const card = localFileCard(page, "archive.zip");
+  await expect(card).toContainText("opens in default app");
+  await card.getByTestId("local-file-card-menu").click();
+  await expect(
+    page.getByRole("button", { name: "Open in Buzz Preview" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Choose approved folder…" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Document access settings…" }),
+  ).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(() =>
         window.__BUZZ_E2E_COMMANDS__?.includes("read_local_document"),
-      ),
-    )
-    .toBe(false);
-});
-
-test("approves a document folder through the backend-owned picker flow", async ({
-  page,
-}) => {
-  const path = "/Users/adminmat/.codex/private/REPORT.md";
-  await emitMessage(page, {
-    channelName: "general",
-    content: `Open ${path}.`,
-  });
-
-  const card = localFileCard(page, "REPORT.md");
-  await card.getByTestId("local-file-card-menu").click();
-  const menu = page.locator("[data-local-file-context-menu]");
-  await expect(menu).toBeVisible();
-  await expect
-    .poll(() =>
-      menu.evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        const margin = 8;
-        return (
-          bounds.left >= margin &&
-          bounds.top >= margin &&
-          bounds.right <= window.innerWidth - margin &&
-          bounds.bottom <= window.innerHeight - margin
-        );
-      }),
-    )
-    .toBe(true);
-  await page.getByRole("button", { name: "Choose approved folder…" }).click();
-
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.__BUZZ_E2E_COMMANDS__?.includes("choose_document_root"),
-      ),
-    )
-    .toBe(true);
-  await expect
-    .poll(() =>
-      page.evaluate(() =>
-        window.__BUZZ_E2E_COMMANDS__?.some((command) =>
-          ["pick_document_root", "add_document_root"].includes(command),
-        ),
       ),
     )
     .toBe(false);

@@ -3,9 +3,7 @@ import { FileText, FolderOpen, MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
 import {
-  canOpenLocalDocument,
   canPreviewDocument,
-  openDocumentRootSettings,
   openLocalDocument,
   type LocalFileReference,
 } from "@/features/documents/localDocumentViewer";
@@ -48,19 +46,6 @@ export function LocalFileCard({
 
   const filename = filenameFromPath(reference.path);
   const previewable = canPreviewDocument(reference.path);
-  const openable = canOpenLocalDocument(reference.path);
-
-  const chooseApprovedFolder = React.useCallback(async () => {
-    try {
-      const roots = await invokeTauri<string[] | null>(
-        "choose_document_root",
-        {},
-      );
-      if (roots) toast.success("Document folder approved");
-    } catch (error) {
-      toast.error(errorMessage(error, "Could not approve the selected folder"));
-    }
-  }, []);
 
   const openDefault = React.useCallback(() => {
     void invokeTauri("open_local_document", {
@@ -94,36 +79,24 @@ export function LocalFileCard({
   }, [reference.path]);
 
   const openCard = React.useCallback(() => {
-    if (openable) {
-      openDefault();
-    } else {
-      reveal();
-    }
-  }, [openDefault, openable, reveal]);
+    openDefault();
+  }, [openDefault]);
 
   const menuItems = [
-    ...(previewable
-      ? [
-          {
-            label: "Preview in Buzz",
-            onSelect: () => {
-              closeMenu();
-              openLocalDocument(reference);
-            },
-          },
-        ]
-      : []),
-    ...(openable
-      ? [
-          {
-            label: "Open with Default App",
-            onSelect: () => {
-              closeMenu();
-              openDefault();
-            },
-          },
-        ]
-      : []),
+    {
+      label: "Open in Buzz Preview",
+      onSelect: () => {
+        closeMenu();
+        openLocalDocument(reference);
+      },
+    },
+    {
+      label: "Open with Default App",
+      onSelect: () => {
+        closeMenu();
+        openDefault();
+      },
+    },
     {
       label: "Reveal in Finder",
       onSelect: () => {
@@ -138,29 +111,11 @@ export function LocalFileCard({
         copyTextToClipboard(reference.path, "File path copied to clipboard");
       },
     },
-    ...(previewable
-      ? [
-          {
-            label: "Copy SHA-256",
-            onSelect: () => {
-              closeMenu();
-              copyChecksum();
-            },
-          },
-        ]
-      : []),
     {
-      label: "Choose approved folder…",
+      label: "Copy SHA-256",
       onSelect: () => {
         closeMenu();
-        void chooseApprovedFolder();
-      },
-    },
-    {
-      label: "Document access settings…",
-      onSelect: () => {
-        closeMenu();
-        openDocumentRootSettings();
+        copyChecksum();
       },
     },
   ];
@@ -179,11 +134,7 @@ export function LocalFileCard({
             event.preventDefault();
             setMenu({ x: event.clientX, y: event.clientY });
           }}
-          title={
-            openable
-              ? `Open ${filename} with its default app`
-              : `Reveal ${filename} in Finder`
-          }
+          title={`Open ${filename} with its default app`}
           type="button"
         >
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
@@ -195,7 +146,9 @@ export function LocalFileCard({
             </span>
             <span className="block text-xs text-muted-foreground">
               {extensionLabel(reference.path)} · local file
-              {previewable ? " · Preview available" : " · Reveal only"}
+              {previewable
+                ? " · Preview available"
+                : " · Preview unavailable · opens in default app"}
             </span>
           </span>
           <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />

@@ -4,8 +4,7 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 use crate::commands::document_viewer::{
-    canonical_document_root, read_local_document_with_expected_hash,
-    read_local_document_with_roots, verify_attachment_bytes, DocumentDeniedReason,
+    read_local_document_with_expected_hash, verify_attachment_bytes, DocumentDeniedReason,
     DocumentIntegrityReason, DocumentReadResult,
 };
 
@@ -14,35 +13,12 @@ fn source(path: &std::path::Path) -> String {
 }
 
 #[test]
-fn rejects_the_filesystem_root_and_regular_files_as_document_roots() {
-    assert!(canonical_document_root(std::path::Path::new("/")).is_err());
-
-    let root = tempdir().expect("temp root");
-    let file = root.path().join("REPORT.md");
-    fs::write(&file, "report").expect("write fixture");
-    assert!(canonical_document_root(&file).is_err());
-}
-
-#[cfg(unix)]
-#[test]
-fn rejects_a_symlink_selected_as_a_document_root() {
-    use std::os::unix::fs::symlink;
-
-    let root = tempdir().expect("temp root");
-    let link_parent = tempdir().expect("link parent");
-    let link = link_parent.path().join("linked-root");
-    symlink(root.path(), &link).expect("create symlink");
-
-    assert!(canonical_document_root(&link).is_err());
-}
-
-#[test]
-fn reads_supported_text_file_inside_an_approved_root() {
+fn reads_supported_text_file_without_an_approved_root() {
     let root = tempdir().expect("temp root");
     let path = root.path().join("REPORT.md");
     fs::write(&path, "# Answer\n\n42\n").expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -65,11 +41,7 @@ fn rejects_a_local_document_when_its_declared_hash_does_not_match() {
     let path = root.path().join("REPORT.md");
     fs::write(&path, "# Answer\n").expect("write fixture");
 
-    let result = read_local_document_with_expected_hash(
-        &path,
-        &[root.path().to_path_buf()],
-        Some(&"a".repeat(64)),
-    );
+    let result = read_local_document_with_expected_hash(&path, Some(&"a".repeat(64)));
 
     assert_eq!(
         result,
@@ -89,19 +61,19 @@ fn accepts_a_local_document_when_its_declared_hash_matches() {
     let hash = hex::encode(Sha256::digest(bytes));
 
     assert!(matches!(
-        read_local_document_with_expected_hash(&path, &[root.path().to_path_buf()], Some(&hash)),
+        read_local_document_with_expected_hash(&path, Some(&hash)),
         DocumentReadResult::Ready { .. }
     ));
 }
 
 #[test]
-fn reads_pdf_file_inside_an_approved_root() {
+fn reads_pdf_file_without_an_approved_root() {
     let root = tempdir().expect("temp root");
     let path = root.path().join("REPORT.pdf");
     let bytes = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
     fs::write(&path, bytes).expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     match result {
         DocumentReadResult::Pdf {
@@ -130,7 +102,7 @@ fn reports_invalid_pdf_distinctly() {
     let path = root.path().join("BROKEN.pdf");
     fs::write(&path, b"not a PDF").expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -145,7 +117,7 @@ fn reports_a_missing_file_as_absent_not_failed() {
     let root = tempdir().expect("temp root");
     let path = root.path().join("MISSING.md");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -155,27 +127,9 @@ fn reports_a_missing_file_as_absent_not_failed() {
     );
 }
 
-#[test]
-fn denies_files_outside_the_approved_roots() {
-    let root = tempdir().expect("temp root");
-    let outside = tempdir().expect("outside root");
-    let path = outside.path().join("REPORT.md");
-    fs::write(&path, "private").expect("write fixture");
-
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
-
-    assert_eq!(
-        result,
-        DocumentReadResult::Denied {
-            source: source(&path),
-            reason: DocumentDeniedReason::OutsideApprovedRoots,
-        }
-    );
-}
-
 #[cfg(unix)]
 #[test]
-fn denies_symlinks_that_escape_an_approved_root() {
+fn reads_a_regular_file_reached_through_a_symlink() {
     use std::os::unix::fs::symlink;
 
     let root = tempdir().expect("temp root");
@@ -185,51 +139,14 @@ fn denies_symlinks_that_escape_an_approved_root() {
     fs::write(&target, "private").expect("write target");
     symlink(&target, &path).expect("create symlink");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
-
-    assert_eq!(
-        result,
-        DocumentReadResult::Denied {
-            source: source(&path),
-            reason: DocumentDeniedReason::OutsideApprovedRoots,
-        }
-    );
-}
-
-#[test]
-fn denies_hidden_path_components_beneath_an_approved_root() {
-    let root = tempdir().expect("temp root");
-    let hidden = root.path().join(".private");
-    fs::create_dir(&hidden).expect("create hidden directory");
-    let path = hidden.join("NOTES.md");
-    fs::write(&path, "private").expect("write fixture");
-
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
-
-    assert_eq!(
-        result,
-        DocumentReadResult::Denied {
-            source: source(&path),
-            reason: DocumentDeniedReason::HiddenPath,
-        }
-    );
-}
-
-#[test]
-fn denies_sensitive_filenames_even_when_the_extension_is_supported() {
-    let root = tempdir().expect("temp root");
-    let path = root.path().join("credentials.txt");
-    fs::write(&path, "secret").expect("write fixture");
-
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
-
-    assert_eq!(
-        result,
-        DocumentReadResult::Denied {
-            source: source(&path),
-            reason: DocumentDeniedReason::SensitiveName,
-        }
-    );
+    assert!(matches!(
+        read_local_document_with_expected_hash(&path, None),
+        DocumentReadResult::Ready {
+            source: source_path,
+            content,
+            ..
+        } if source_path == source(&target.canonicalize().expect("canonical fixture")) && content == "private"
+    ));
 }
 
 #[test]
@@ -238,7 +155,7 @@ fn reports_unsupported_extensions_without_reading_content() {
     let path = root.path().join("ARCHIVE.zip");
     fs::write(&path, b"PK\x03\x04").expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -255,7 +172,7 @@ fn reports_directories_as_denied() {
     let path = root.path().join("folder.md");
     fs::create_dir(&path).expect("create fixture directory");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -272,7 +189,7 @@ fn reports_empty_documents_distinctly() {
     let path = root.path().join("EMPTY.txt");
     fs::write(&path, "").expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -290,7 +207,7 @@ fn reports_non_utf8_text_as_binary() {
     let path = root.path().join("BINARY.txt");
     fs::write(&path, [0xff, 0xfe, 0x00]).expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -307,7 +224,7 @@ fn rejects_oversized_text_documents_before_reading_them() {
     let file = fs::File::create(&path).expect("create fixture");
     file.set_len(2 * 1024 * 1024 + 1).expect("size fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     assert_eq!(
         result,
@@ -325,7 +242,7 @@ fn truncates_supported_documents_at_the_display_byte_limit() {
     let path = root.path().join("LONG.txt");
     fs::write(&path, vec![b'a'; 300 * 1024]).expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     match result {
         DocumentReadResult::Ready {
@@ -352,7 +269,7 @@ fn truncates_supported_documents_at_the_line_limit() {
     let path = root.path().join("LINES.txt");
     fs::write(&path, "line\n".repeat(5_001)).expect("write fixture");
 
-    let result = read_local_document_with_roots(&path, &[root.path().to_path_buf()]);
+    let result = read_local_document_with_expected_hash(&path, None);
 
     match result {
         DocumentReadResult::Ready {

@@ -22,10 +22,6 @@ export type LocalDocumentViewerRequest = {
   expectedSha256?: string;
 };
 
-export type LocalDocumentRootSettingsRequest = {
-  kind: "root-settings";
-};
-
 export type AttachmentDocumentViewerRequest = {
   kind: "attachment";
   url: string;
@@ -37,8 +33,7 @@ export type AttachmentDocumentViewerRequest = {
 
 export type DocumentViewerRequest =
   | LocalDocumentViewerRequest
-  | AttachmentDocumentViewerRequest
-  | LocalDocumentRootSettingsRequest;
+  | AttachmentDocumentViewerRequest;
 
 export type LocalFileReference = {
   path: string;
@@ -64,10 +59,6 @@ export function canPreviewDocument(filename: string): boolean {
   return documentExtension(filename) !== null;
 }
 
-export function canOpenLocalDocument(filename: string): boolean {
-  return canPreviewDocument(filename);
-}
-
 export function openLocalDocument(reference: LocalFileReference | string) {
   currentRequest = {
     kind: "local",
@@ -89,11 +80,6 @@ export function openAttachmentDocument(
 export function closeDocumentViewer() {
   if (currentRequest === null) return;
   currentRequest = null;
-  notify();
-}
-
-export function openDocumentRootSettings() {
-  currentRequest = { kind: "root-settings" };
   notify();
 }
 
@@ -165,7 +151,7 @@ function linkifyOutsideInlineCode(text: string): string {
   return output + linkifyPlainText(text.slice(cursor));
 }
 
-/** Linkify supported bare absolute paths without rewriting fenced or inline code. */
+/** Linkify bare absolute paths without rewriting fenced or inline code. */
 export function linkifyLocalDocumentPaths(content: string): string {
   let output = "";
   let cursor = 0;

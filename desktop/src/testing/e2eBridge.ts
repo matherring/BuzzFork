@@ -11119,7 +11119,6 @@ export function maybeInstallE2eTauriMocks() {
       sourceUrl: null;
     };
   }> = [];
-  let mockDocumentRoots = ["/Users/adminmat/.buzz"];
   const handleMockCommand = async (
     command: string,
     payload: unknown,
@@ -13546,19 +13545,26 @@ export function maybeInstallE2eTauriMocks() {
       }
       case "read_local_document": {
         const { path } = payload as { path: string };
-        if (
-          !mockDocumentRoots.some(
-            (root) => path === root || path.startsWith(`${root}/`),
-          )
-        ) {
+        const filename = path.split("/").at(-1) ?? "document.md";
+        const extension = filename.split(".").at(-1)?.toLowerCase() ?? "";
+        if (!["csv", "markdown", "md", "pdf", "txt"].includes(extension)) {
           return {
-            status: "denied",
+            status: "unsupported",
             source: path,
-            reason: "outside_approved_roots",
+            extension: extension || null,
           };
         }
-        const filename = path.split("/").at(-1) ?? "document.md";
-        const extension = filename.split(".").at(-1)?.toLowerCase() ?? "md";
+        if (extension === "pdf") {
+          const pdf = "%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+          return {
+            status: "pdf",
+            source: path,
+            file_name: filename,
+            extension,
+            content_base64: window.btoa(pdf),
+            bytes_total: pdf.length,
+          };
+        }
         const content =
           extension === "csv"
             ? "name,value\nanswer,42\n"
@@ -13575,35 +13581,9 @@ export function maybeInstallE2eTauriMocks() {
           truncated: false,
         };
       }
-      case "choose_document_root": {
-        const root =
-          "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts";
-        mockDocumentRoots = [...new Set([...mockDocumentRoots, root])].sort();
-        return [...mockDocumentRoots];
-      }
-      case "list_document_roots":
-        return [...mockDocumentRoots];
-      case "remove_document_root": {
-        const { root } = payload as { root: string };
-        mockDocumentRoots = mockDocumentRoots.filter(
-          (candidate) => candidate !== root,
-        );
-        return [...mockDocumentRoots];
-      }
       case "open_local_document":
-      case "reveal_local_file": {
-        const { path } = payload as { path: string };
-        if (
-          !mockDocumentRoots.some(
-            (root) => path === root || path.startsWith(`${root}/`),
-          )
-        ) {
-          throw new Error(
-            "This file is outside the approved document folders.",
-          );
-        }
+      case "reveal_local_file":
         return null;
-      }
       case "local_document_checksum":
         return "a".repeat(64);
       case "read_document_attachment": {

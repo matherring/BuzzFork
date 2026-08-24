@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  canOpenLocalDocument,
   canPreviewDocument,
   linkifyLocalDocumentPaths,
   localFileReferenceFromHref,
@@ -11,7 +10,7 @@ import {
   localDocumentPathFromText,
 } from "./localDocumentViewer.ts";
 
-test("recognizes the four approved document families", () => {
+test("recognizes the supported preview document families", () => {
   assert.equal(
     localDocumentPathFromText("/Users/adminmat/.buzz/RESEARCH/REPORT.md"),
     "/Users/adminmat/.buzz/RESEARCH/REPORT.md",
@@ -27,8 +26,7 @@ test("recognizes the four approved document families", () => {
   assert.equal(localDocumentPathFromText("relative/REPORT.md"), null);
   assert.equal(localDocumentPathFromText("/tmp/source.ts"), null);
   assert.equal(localDocumentPathFromText("/tmp/archive.zip"), null);
-  assert.equal(canOpenLocalDocument("REPORT.pdf"), true);
-  assert.equal(canOpenLocalDocument("archive.zip"), false);
+  assert.equal(canPreviewDocument("REPORT.docx"), false);
   assert.deepEqual(localFileReferenceFromText("/tmp/archive.zip"), {
     path: "/tmp/archive.zip",
   });
