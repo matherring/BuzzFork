@@ -5,9 +5,10 @@ Branch: `feat/side-panel-document-viewer`
 
 ## Goal
 
-Open approved local paths and relay-hosted document attachments in a read-only right-side
-panel while keeping the conversation visible. A click must either open the viewer or show
-an explicit typed error; document links must never be inert.
+Preview explicitly requested local paths and relay-hosted document attachments in a read-only
+right-side panel while keeping the conversation visible. Local cards remain inert until a user
+chooses an action: their primary click opens a safe type in its native default app, while
+**Preview in Buzz** is an explicit context-menu action.
 
 ## Supported formats and limits
 
@@ -26,9 +27,16 @@ the viewer never guesses from an extension alone.
 
 ### Local paths
 
-- Read only after an explicit click.
-- Canonicalize before policy checks.
-- Allow only files under the Buzz workspace root (`~/.buzz`).
+- Read only after an explicit user action; rendering a card never reads, opens, or uploads a file.
+- A trusted native picker and native confirmation establish each approved root; the renderer
+  cannot supply a pathname that grants access. The versioned, app-local root store is atomically
+  written with restrictive permissions and roots can be listed and revoked from Document access
+  settings.
+- Canonicalize the picker result and requested file before policy checks. Reject `/`, the home
+  directory, hidden, sensitive, system, symlink, and non-directory roots; reject symlink escapes.
+- Allow only files beneath a locally user-approved root. A literal path already sent in a signed
+  message remains visible to that message's recipients; card actions are deliberately single-Mac
+  behavior and degrade to normal text where the file is not local.
 - Reject symlink escapes, hidden components, sensitive filenames, non-files, absent files,
   unsupported extensions, oversized inputs, empty inputs, invalid PDFs, and failed reads as
   distinct states.
@@ -37,6 +45,13 @@ the viewer never guesses from an extension alone.
 ### Relay attachments
 
 - The CLI admits only the four document families in addition to the existing media types.
+- For a document passed through `buzz messages send --file`, the CLI emits a normal
+  `[filename](media-url)` anchor and an `imeta filename <sanitized-basename>` field. Images and
+  videos retain their existing media markdown syntax. The filename is therefore available to the
+  desktop file-card classifier without inferring an extension from a content-addressed blob URL.
+- The relay normalizes signatureless Markdown and CSV uploads to `application/octet-stream` and a
+  `.bin` blob URL. The original filename in `imeta`, rather than the transport MIME or URL suffix,
+  is authoritative for routing those document cards.
 - The desktop accepts only same-relay `/media/` URLs.
 - The signed attachment filename selects the approved document family.
 - Declared size and SHA-256 are mandatory and verified against the downloaded bytes.
@@ -45,17 +60,22 @@ the viewer never guesses from an extension alone.
 
 ## Interaction
 
-1. A local path link or verified document attachment emits a typed viewer request.
-2. `ChannelPane` opens `DocumentViewerPane` in the existing right auxiliary slot used by
+1. A local card primary click opens PDF, Markdown, text, or CSV with the native default app;
+   all other card types offer Finder reveal only. Its menu offers Preview in Buzz when supported,
+   Reveal in Finder, Copy path, Copy SHA-256, native-picker root approval, and root settings.
+2. An explicit local **Preview in Buzz** action or verified document attachment emits a typed
+   viewer request.
+3. `ChannelPane` opens `DocumentViewerPane` in the existing right auxiliary slot used by
    thread/profile views.
-3. The pane shows the filename, source, counts, truncation notice, reload, close, and—only
+4. The pane shows the filename, source, counts, truncation notice, reload, close, and—only
    for relay attachments—download controls.
-4. Closing the document reveals the previously open auxiliary view instead of navigating
+5. Closing the document reveals the previously open auxiliary view instead of navigating
    away from the conversation.
 
 ## Security controls
 
-- No write, move, delete, execute, directory-listing, or arbitrary `file://` capability.
+- No write, move, delete, execute, directory-listing, arbitrary `file://`, or renderer-provided
+  root-grant capability.
 - No remote frame permission. PDF rendering requires the narrow CSP directive
   `frame-src 'self' blob:` so only app-local and in-memory frames are available.
 - Markdown loaded from a document is rendered non-interactively, preventing nested path or
@@ -70,12 +90,13 @@ to a visible panel message.
 
 ## Acceptance criteria
 
-- Markdown, text, CSV, and PDF open in the right-side panel without hiding the timeline.
-- Both local paths and verified relay attachments work through the same panel contract.
+- Markdown, text, CSV, and PDF preview in the right-side panel without hiding the timeline.
+- Supported local cards open their native default app on primary click; preview remains explicit.
+- Both local paths and verified relay attachments use the same typed viewer contract.
 - Unsupported or disallowed inputs show an explicit reason and never become clickable no-ops.
-- Local reads remain bounded to `~/.buzz`, including after symlink resolution.
+- Local reads remain bounded to user-approved roots, including after symlink resolution.
 - Relay reads are same-origin, size-capped, and hash-verified.
 - Real-file Rust tests cover approved text and PDF inputs plus boundary failures.
 - Frontend tests cover request routing, typed states, panel coexistence, and attachment actions.
-- The packaged canary preserves executable sidecars and has a documented rollback to the
-  installed normal build.
+- The packaged CSP permits only `'self'` and `blob:` frames, allowing in-memory PDF preview
+  without remote frame access.

@@ -12705,15 +12705,13 @@ export function maybeInstallE2eTauriMocks() {
           truncated: false,
         };
       }
-      case "pick_document_root":
-        return "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts";
-      case "list_document_roots":
-        return [...mockDocumentRoots];
-      case "add_document_root": {
-        const { root } = payload as { root: string };
+      case "choose_document_root": {
+        const root = "/Users/adminmat/Projects/business-ops/entities/vbw-events/drafts";
         mockDocumentRoots = [...new Set([...mockDocumentRoots, root])].sort();
         return [...mockDocumentRoots];
       }
+      case "list_document_roots":
+        return [...mockDocumentRoots];
       case "remove_document_root": {
         const { root } = payload as { root: string };
         mockDocumentRoots = mockDocumentRoots.filter(
