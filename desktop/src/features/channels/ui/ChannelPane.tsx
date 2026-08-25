@@ -29,10 +29,7 @@ import { isThreadReply } from "@/features/messages/lib/threading";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { DocumentViewerPane } from "@/features/documents/DocumentViewerPane";
-import {
-  closeDocumentViewer,
-  useDocumentViewerRequest,
-} from "@/features/documents/localDocumentViewer";
+import { closeDocumentViewer } from "@/features/documents/localDocumentViewer";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
@@ -60,6 +57,7 @@ import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types"
 import * as agentSessionSelection from "@/features/channels/ui/agentSessionSelection";
 import { usePrepareDmSendChannel } from "@/features/channels/ui/usePrepareDmSendChannel";
 import { useChannelPaneMessages } from "@/features/channels/ui/useChannelPaneMessages";
+import { useDocumentViewerPaneCoordination } from "@/features/channels/ui/useDocumentViewerPaneCoordination";
 import { Button } from "@/shared/ui/button";
 import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRenderScopedReactionHydration";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -543,7 +541,21 @@ export const ChannelPane = React.memo(function ChannelPane({
       }),
     [agentSessionAgents, openAgentSessionPubkey, profilePanelPubkey, profiles],
   );
-  const documentViewerRequest = useDocumentViewerRequest();
+  const documentViewerRequest = useDocumentViewerPaneCoordination({
+    activeChannelId: activeChannel?.id ?? null,
+    channelManagementOpen,
+    onCloseAgentSession,
+    onCloseChannelManagement,
+    onCloseProfilePanel,
+    onCloseThread,
+    openThreadHeadId,
+    profilePanelPubkey: profilePanelPubkey ?? null,
+    selectedAgentPubkey:
+      activeChannel && selectedAgent ? selectedAgent.pubkey : null,
+    shouldShowThreadSkeleton,
+    threadHeadMessageId: threadHeadMessage?.id ?? null,
+  });
+
   const hasSplitAuxiliaryPane =
     useSplitAuxiliaryPane &&
     (Boolean(documentViewerRequest) ||
@@ -843,8 +855,14 @@ export const ChannelPane = React.memo(function ChannelPane({
         {documentViewerRequest ? (
           wrapAux(
             <DocumentViewerPane
+              isSinglePanelView={
+                useSplitAuxiliaryPane ? false : isSinglePanelView
+              }
+              layout={useSplitAuxiliaryPane ? "split" : "standalone"}
               onClose={closeDocumentViewer}
               request={documentViewerRequest}
+              transparentChrome={useSplitAuxiliaryPane}
+              widthPx={threadPanelWidthPx}
             />,
             "document-viewer-panel",
           )

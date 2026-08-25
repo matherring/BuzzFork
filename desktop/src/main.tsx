@@ -32,6 +32,17 @@ const E2E_COMMUNITY_ID = "e2e-default-community";
 const ONBOARDING_COMPLETION_STORAGE_KEY_PREFIX = "buzz-onboarding-complete.v1:";
 const DEV_STATE_RESET_PARAM = "resetDevState";
 
+function packagedLocalDocumentFixturePath(): string | null {
+  if (import.meta.env.MODE !== "e2e") {
+    return null;
+  }
+
+  const url = new URL(window.location.href);
+  return url.searchParams.get("e2e") === "local-document"
+    ? url.searchParams.get("path")
+    : null;
+}
+
 function resetDevWebviewStateFromUrl() {
   if (!import.meta.env.DEV) {
     return;
@@ -123,6 +134,21 @@ async function installE2eBridgeIfConfigured() {
 }
 
 async function bootstrap() {
+  const fixturePath = packagedLocalDocumentFixturePath();
+  if (fixturePath) {
+    const { PackagedLocalDocumentFixture } = await import(
+      "@/testing/PackagedLocalDocumentFixture"
+    );
+    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+      <React.StrictMode>
+        <RootErrorBoundary>
+          <PackagedLocalDocumentFixture path={fixturePath} />
+        </RootErrorBoundary>
+      </React.StrictMode>,
+    );
+    return;
+  }
+
   resetDevWebviewStateFromUrl();
   configureDevE2eBridgeFromUrl();
   recoverLocalStorageQuotaOnStartup();
@@ -134,4 +160,19 @@ async function bootstrap() {
   renderApp();
 }
 
-void bootstrap();
+void bootstrap().catch((error: unknown) => {
+  console.error("Buzz bootstrap failed:", error);
+
+  // A packaged E2E bundle has no browser console attached. Surface a bootstrap
+  // failure in that test-only build instead of leaving a blank native window.
+  if (import.meta.env.MODE !== "e2e") {
+    return;
+  }
+
+  const diagnostic = document.createElement("pre");
+  diagnostic.dataset.testid = "e2e-bootstrap-error";
+  diagnostic.textContent = `E2E bootstrap failed:\n${
+    error instanceof Error ? (error.stack ?? error.message) : String(error)
+  }`;
+  document.body.replaceChildren(diagnostic);
+});

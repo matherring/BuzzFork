@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FileText, FolderOpen, MoreHorizontal } from "lucide-react";
+import { ExternalLink, Eye, FileText, MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -79,8 +79,12 @@ export function LocalFileCard({
   }, [reference.path]);
 
   const openCard = React.useCallback(() => {
+    if (previewable) {
+      openLocalDocument(reference);
+      return;
+    }
     openDefault();
-  }, [openDefault]);
+  }, [openDefault, previewable, reference]);
 
   const menuItems = [
     {
@@ -123,35 +127,41 @@ export function LocalFileCard({
   return (
     <>
       <span
-        className="my-1 inline-flex max-w-sm items-stretch overflow-hidden rounded-xl border border-border/70 bg-muted/40 align-middle no-underline"
+        className="my-1 inline-flex max-w-xs items-stretch overflow-hidden rounded-xl border border-border/70 bg-muted/40 align-middle no-underline"
         data-testid="local-file-card"
       >
         <button
-          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/70"
+          className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-muted/70"
           data-testid="local-file-card-open"
           onClick={openCard}
           onContextMenu={(event) => {
             event.preventDefault();
             setMenu({ x: event.clientX, y: event.clientY });
           }}
-          title={`Open ${filename} with its default app`}
+          title={
+            previewable
+              ? `Open ${filename} in the Buzz preview`
+              : `Open ${filename} with its default app`
+          }
           type="button"
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
             <FileText className="h-4 w-4" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-foreground">
               {filename}
             </span>
-            <span className="block text-xs text-muted-foreground">
-              {extensionLabel(reference.path)} · local file
-              {previewable
-                ? " · Preview available"
-                : " · Preview unavailable · opens in default app"}
+            <span className="block text-2xs text-muted-foreground">
+              {extensionLabel(reference.path)} ·{" "}
+              {previewable ? "preview" : "default app"}
             </span>
           </span>
-          <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+          {previewable ? (
+            <Eye className="h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
         </button>
         <button
           aria-label={`More actions for ${filename}`}
