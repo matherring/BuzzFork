@@ -11,7 +11,15 @@ const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
 const LOCAL_FILE_LINK_PREFIX = "buzz-local-file:";
 const LEGACY_LOCAL_DOCUMENT_LINK_PREFIX = "buzz-local-document:";
 const TRAILING_PATH_PUNCTUATION = /[.),;:!?]+$/;
-const BARE_PATH_PATTERN = /(^|[\s(])((?:\/(?!\/))[^\s`"<>]+)/g;
+// A message can contain a normal macOS path such as
+// `/tmp/Buzz Viewer Evidence/quarterly report.md`.  Prefer the first
+// extension-terminated path so prose after the filename is never folded into
+// the link, while retaining the no-whitespace form for extensionless files.
+//
+// The URL stored in the Markdown link is percent-encoded by `localFileHref`,
+// so this matcher is the only place a space-containing source path is split.
+const BARE_PATH_PATTERN =
+  /(^|[\s(])((?:\/(?!\/))(?:[^\n`"<>]*?\.[A-Za-z0-9][A-Za-z0-9._-]*|[^\s`"<>]+))(?=$|[\s),;:!?])/g;
 const INLINE_CODE_PATTERN = /(`+)([^\n]*?)\1/g;
 const FENCED_CODE_PATTERN =
   /(^|\n)( {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\2\3(?=\n|$)|$)/g;
@@ -117,26 +125,31 @@ function localFileHref(reference: LocalFileReference): string {
 }
 
 function linkifyPlainText(text: string): string {
-  return text.replace(
-    BARE_PATH_PATTERN,
-    (match, prefix: string, candidate: string, offset: number) => {
-      const reference = localFileReferenceFromText(candidate);
-      if (!reference) return match;
-      const preceding = text.slice(
-        Math.max(0, offset - 2),
-        offset + prefix.length,
-      );
-      if (preceding.endsWith("](")) return match;
-      const following = text.slice(offset + match.length);
-      const expectedSha256 = following.match(
-        /^\s*\(sha256\s+([a-f0-9]{64})\)/i,
-      )?.[1];
-      return `${prefix}[${reference.path}](${localFileHref({
-        ...reference,
-        ...(expectedSha256 ? { expectedSha256 } : {}),
-      })})${candidate.slice(reference.path.length)}`;
-    },
-  );
+  let output = "";
+  let cursor = 0;
+  for (const match of text.matchAll(BARE_PATH_PATTERN)) {
+    const offset = match.index ?? 0;
+    const [matched, prefix, candidate] = match;
+    const reference = localFileReferenceFromText(candidate);
+    if (!reference) continue;
+    const preceding = text.slice(
+      Math.max(0, offset - 2),
+      offset + prefix.length,
+    );
+    if (preceding.endsWith("](")) continue;
+
+    const end = offset + matched.length;
+    const checksumMatch = text
+      .slice(end)
+      .match(/^\s*\(sha256\s+([a-f0-9]{64})\)/i);
+    output += text.slice(cursor, offset);
+    output += `${prefix}[${reference.path}](${localFileHref({
+      ...reference,
+      ...(checksumMatch ? { expectedSha256: checksumMatch[1] } : {}),
+    })})${candidate.slice(reference.path.length)}`;
+    cursor = end + (checksumMatch?.[0].length ?? 0);
+  }
+  return output + text.slice(cursor);
 }
 
 function linkifyOutsideInlineCode(text: string): string {

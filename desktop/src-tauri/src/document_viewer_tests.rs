@@ -36,6 +36,31 @@ fn reads_supported_text_file_without_an_approved_root() {
 }
 
 #[test]
+fn reads_the_exact_space_containing_local_path_selected_from_a_message() {
+    let root = tempdir().expect("temp root");
+    let directory = root.path().join("Buzz Viewer Evidence");
+    fs::create_dir(&directory).expect("create space-containing directory");
+    let path = directory.join("quarterly report.md");
+    fs::write(&path, "# Verified native read\n").expect("write fixture");
+
+    let result = read_local_document_with_expected_hash(&path, None);
+
+    assert_eq!(
+        result,
+        DocumentReadResult::Ready {
+            source: source(&path.canonicalize().expect("canonical fixture")),
+            file_name: "quarterly report.md".into(),
+            extension: "md".into(),
+            content: "# Verified native read\n".into(),
+            bytes_total: 23,
+            bytes_read: 23,
+            line_count: 1,
+            truncated: false,
+        }
+    );
+}
+
+#[test]
 fn rejects_a_local_document_when_its_declared_hash_does_not_match() {
     let root = tempdir().expect("temp root");
     let path = root.path().join("REPORT.md");

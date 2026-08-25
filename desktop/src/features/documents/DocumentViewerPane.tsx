@@ -1,12 +1,29 @@
 import * as React from "react";
-import { AlertCircle, Download, FileText, RefreshCw, X } from "lucide-react";
+import { AlertCircle, Download, FileText, RefreshCw } from "lucide-react";
+import {
+  getDocument,
+  GlobalWorkerOptions,
+} from "pdfjs-dist/legacy/build/pdf.mjs";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import { toast } from "sonner";
 
 import type { DocumentViewerRequest } from "@/features/documents/localDocumentViewer";
 import { invokeTauri } from "@/shared/api/tauri";
+import {
+  AuxiliaryPanel,
+  AuxiliaryPanelBody,
+  AuxiliaryPanelHeader,
+  AuxiliaryPanelHeaderActions,
+  AuxiliaryPanelHeaderGroup,
+  AuxiliaryPanelHeaderTitleBlock,
+  type AuxiliaryPanelLayout,
+  AUXILIARY_PANEL_DEFAULT_WIDTH_PX,
+} from "@/shared/layout/AuxiliaryPanel";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Markdown } from "@/shared/ui/markdown";
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 export type DocumentDeniedReason = "not_a_file" | "untrusted_attachment_url";
 
@@ -162,31 +179,125 @@ function requestSourceLabel(request: DocumentPreviewRequest) {
   return request.kind === "local" ? request.path : "Buzz attachment";
 }
 
-function pdfObjectUrl(contentBase64: string): string {
+function pdfBytes(contentBase64: string): Uint8Array {
   const decoded = window.atob(contentBase64);
   const bytes = new Uint8Array(decoded.length);
   for (let index = 0; index < decoded.length; index += 1) {
     bytes[index] = decoded.charCodeAt(index);
   }
-  return URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+  return bytes;
+}
+
+function PdfPreview({
+  contentBase64,
+  title,
+}: {
+  contentBase64: string;
+  title: string;
+}) {
+  const pagesRef = React.useRef<HTMLDivElement>(null);
+  const [renderError, setRenderError] = React.useState(false);
+
+  React.useEffect(() => {
+    const pages = pagesRef.current;
+    if (!pages) return;
+
+    let disposed = false;
+    const loadingTask = getDocument({ data: pdfBytes(contentBase64) });
+    pages.replaceChildren();
+    setRenderError(false);
+
+    void loadingTask.promise
+      .then(async (document) => {
+        for (
+          let pageNumber = 1;
+          pageNumber <= document.numPages;
+          pageNumber += 1
+        ) {
+          if (disposed) return;
+          const page = await document.getPage(pageNumber);
+          const viewport = page.getViewport({ scale: 1.5 });
+          const canvas = window.document.createElement("canvas");
+          canvas.className = "block h-auto max-w-full bg-white shadow-sm";
+          canvas.dataset.testid = "document-viewer-pdf-page";
+          canvas.setAttribute("aria-label", `${title}, page ${pageNumber}`);
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          await page.render({ canvas, viewport }).promise;
+          if (disposed) return;
+          pages.append(canvas);
+        }
+      })
+      .catch(() => {
+        if (!disposed) setRenderError(true);
+      });
+
+    return () => {
+      disposed = true;
+      pages.replaceChildren();
+      void loadingTask.destroy();
+    };
+  }, [contentBase64, title]);
+
+  if (renderError) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-8 text-center text-sm text-muted-foreground">
+        Buzz could not render this PDF. Open it in the default app instead.
+      </div>
+    );
+  }
+
+  return (
+    <section
+      aria-label={title}
+      className="flex min-h-0 flex-1 flex-col items-center gap-4 overflow-auto bg-muted/30 p-4"
+      data-testid="document-viewer-pdf"
+      ref={pagesRef}
+    />
+  );
 }
 
 export function DocumentViewerPane({
+  isSinglePanelView = false,
+  layout = "standalone",
   onClose,
   request,
+  transparentChrome = false,
+  widthPx = AUXILIARY_PANEL_DEFAULT_WIDTH_PX,
 }: {
+  isSinglePanelView?: boolean;
+  layout?: AuxiliaryPanelLayout;
   onClose: () => void;
   request: DocumentViewerRequest;
+  transparentChrome?: boolean;
+  widthPx?: number;
 }) {
-  return <DocumentPreviewPane onClose={onClose} request={request} />;
+  return (
+    <DocumentPreviewPane
+      isSinglePanelView={isSinglePanelView}
+      layout={layout}
+      onClose={onClose}
+      request={request}
+      transparentChrome={transparentChrome}
+      widthPx={widthPx}
+    />
+  );
 }
 
 function DocumentPreviewPane({
+  isSinglePanelView,
+  layout,
   onClose,
   request,
+  transparentChrome,
+  widthPx,
 }: {
+  isSinglePanelView: boolean;
+  layout: AuxiliaryPanelLayout;
   onClose: () => void;
   request: DocumentPreviewRequest;
+  transparentChrome: boolean;
+  widthPx: number;
 }) {
   const [reloadToken, setReloadToken] = React.useState(0);
   const [result, setResult] = React.useState<DocumentReadResult | null>(null);
@@ -198,8 +309,8 @@ function DocumentPreviewPane({
       event.preventDefault();
       onClose();
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => window.removeEventListener("keydown", closeOnEscape, true);
   }, [onClose]);
 
   React.useEffect(() => {
@@ -227,17 +338,6 @@ function DocumentPreviewPane({
     };
   }, [request, reloadToken]);
 
-  const [pdfUrl, setPdfUrl] = React.useState<string | null>(null);
-  React.useEffect(() => {
-    if (result?.status !== "pdf") {
-      setPdfUrl(null);
-      return;
-    }
-    const nextUrl = pdfObjectUrl(result.content_base64);
-    setPdfUrl(nextUrl);
-    return () => URL.revokeObjectURL(nextUrl);
-  }, [result]);
-
   const ready = result?.status === "ready" ? displayContent(result) : null;
   const title =
     result &&
@@ -261,24 +361,17 @@ function DocumentPreviewPane({
         }
       : null;
 
-  return (
-    <div
-      className="flex min-h-0 flex-1 flex-col"
-      data-testid="document-viewer-content"
-    >
-      <header className="flex min-h-13 shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2">
+  const header = (
+    <AuxiliaryPanelHeader>
+      <AuxiliaryPanelHeaderGroup>
         <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold" title={title}>
-            {title}
-          </h2>
-          <p
-            className="truncate font-mono text-2xs text-muted-foreground"
-            title={result?.source ?? requestSourceLabel(request)}
-          >
-            {requestSourceLabel(request)}
-          </p>
-        </div>
+        <AuxiliaryPanelHeaderTitleBlock
+          subtitle={requestSourceLabel(request)}
+          subtitleTitle={result?.source ?? requestSourceLabel(request)}
+          title={title}
+        />
+      </AuxiliaryPanelHeaderGroup>
+      <AuxiliaryPanelHeaderActions>
         {downloadAttachment ? (
           <Button
             aria-label={`Download ${title}`}
@@ -296,84 +389,84 @@ function DocumentPreviewPane({
           disabled={loading}
           onClick={() => setReloadToken((value) => value + 1)}
           size="icon"
+          title="Reload document"
           type="button"
           variant="ghost"
         >
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
-        <Button
-          aria-label="Close document viewer"
-          className="shrink-0"
-          onClick={onClose}
-          size="icon"
-          type="button"
-          variant="ghost"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </header>
+      </AuxiliaryPanelHeaderActions>
+    </AuxiliaryPanelHeader>
+  );
 
-      {loading ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Reading document…
-        </div>
-      ) : result?.status === "pdf" && pdfUrl ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="border-b border-border/50 px-4 py-2 text-xs text-muted-foreground">
-            PDF · {formatBytes(result.bytes_total)} · verified read-only preview
+  return (
+    <AuxiliaryPanel
+      header={header}
+      isSinglePanelView={isSinglePanelView}
+      layout={layout}
+      onClose={onClose}
+      testId="document-viewer-shell"
+      transparentChrome={transparentChrome}
+      widthPx={widthPx}
+    >
+      <AuxiliaryPanelBody
+        className="flex min-h-0 flex-1 flex-col"
+        data-testid="document-viewer-content"
+      >
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            Reading document…
           </div>
-          <iframe
-            className="min-h-0 flex-1 bg-white"
-            data-testid="document-viewer-pdf"
-            src={pdfUrl}
-            title={title}
-          />
-        </div>
-      ) : result?.status === "pdf" ? (
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Preparing PDF preview…
-        </div>
-      ) : result?.status === "ready" && ready ? (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/50 px-4 py-2 text-xs text-muted-foreground">
-            <span>{result.extension.toUpperCase()}</span>
-            <span>{result.line_count.toLocaleString()} lines</span>
-            <span>{formatBytes(result.bytes_read)} shown</span>
-            {result.truncated ? (
-              <span className="font-medium text-amber-600 dark:text-amber-400">
-                Truncated from {formatBytes(result.bytes_total)}
-              </span>
+        ) : result?.status === "pdf" ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="border-b border-border/50 px-4 py-2 text-xs text-muted-foreground">
+              PDF · {formatBytes(result.bytes_total)} · verified read-only
+              preview
+            </div>
+            <PdfPreview contentBase64={result.content_base64} title={title} />
+          </div>
+        ) : result?.status === "ready" && ready ? (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/50 px-4 py-2 text-xs text-muted-foreground">
+              <span>{result.extension.toUpperCase()}</span>
+              <span>{result.line_count.toLocaleString()} lines</span>
+              <span>{formatBytes(result.bytes_read)} shown</span>
+              {result.truncated ? (
+                <span className="font-medium text-amber-600 dark:text-amber-400">
+                  Truncated from {formatBytes(result.bytes_total)}
+                </span>
+              ) : null}
+            </div>
+            {ready.notice ? (
+              <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
+                {ready.notice}
+              </div>
             ) : null}
+            {result.extension === "md" || result.extension === "markdown" ? (
+              <div
+                className="min-h-0 flex-1 overflow-auto p-5"
+                data-testid="document-viewer-markdown"
+              >
+                <Markdown content={ready.content} interactive={false} />
+              </div>
+            ) : (
+              <pre
+                className="min-h-0 flex-1 overflow-auto whitespace-pre p-4 font-mono text-xs leading-5 text-foreground selection:bg-primary/20"
+                data-testid={`document-viewer-${result.extension}`}
+              >
+                {ready.content}
+              </pre>
+            )}
           </div>
-          {ready.notice ? (
-            <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
-              {ready.notice}
-            </div>
-          ) : null}
-          {result.extension === "md" || result.extension === "markdown" ? (
-            <div
-              className="min-h-0 flex-1 overflow-auto p-5"
-              data-testid="document-viewer-markdown"
-            >
-              <Markdown content={ready.content} interactive={false} />
-            </div>
-          ) : (
-            <pre
-              className="min-h-0 flex-1 overflow-auto whitespace-pre p-4 font-mono text-xs leading-5 text-foreground selection:bg-primary/20"
-              data-testid={`document-viewer-${result.extension}`}
-            >
-              {ready.content}
-            </pre>
-          )}
-        </div>
-      ) : result && result.status !== "ready" ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-          <AlertCircle className="h-6 w-6 text-muted-foreground" />
-          <p className="max-w-sm text-sm text-muted-foreground">
-            {failureMessage(result, request)}
-          </p>
-        </div>
-      ) : null}
-    </div>
+        ) : result && result.status !== "ready" ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+            <AlertCircle className="h-6 w-6 text-muted-foreground" />
+            <p className="max-w-sm text-sm text-muted-foreground">
+              {failureMessage(result, request)}
+            </p>
+          </div>
+        ) : null}
+      </AuxiliaryPanelBody>
+    </AuxiliaryPanel>
   );
 }
