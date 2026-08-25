@@ -9,6 +9,12 @@ import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { requestOpenSnapshotImport } from "@/features/agents/openSnapshotImportFromUrlEvent";
 import { parseChannelLink } from "@/features/messages/lib/channelLink";
 import {
+  DocumentFileCard,
+  prepareDocumentMarkdown,
+  renderLocalDocumentAnchor,
+  renderLocalDocumentCode,
+} from "@/features/documents/markdownDocumentViewer";
+import {
   parseMessageLink,
   resolveMessageLinkRenderTarget,
   type ParsedMessageLink,
@@ -53,7 +59,6 @@ import {
 } from "./markdown/CodeBlock";
 import { EntityLinkAnchor, useOpenEntityLink } from "./markdown/entityLinks";
 import { ExternalLinkAnchor } from "./markdown/ExternalLinkAnchor";
-import { FileCard } from "./markdown/FileCard";
 import {
   AuthoredDeepLinkAnchor,
   ChannelDeepLinkAnchor,
