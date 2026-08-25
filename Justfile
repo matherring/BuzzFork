@@ -252,24 +252,32 @@ desktop-tauri-test-compiled-flags: _ensure-sidecar-stubs
       cargo test compiled_policy_matches_expected -- --ignored --nocapture
     echo "Both compiled states verified."
 
-# Build the full desktop Tauri app locally (unsigned, for testing)
-# Sidecar binary list must stay in sync with _ensure-sidecar-stubs above.
+# Build the full desktop Tauri app locally (unsigned, for testing).
+# Build and stage real sidecars before invoking Tauri; placeholder files are
+# sufficient for cargo check, but packaging them produces an app that cannot
+# launch managed agents.
 # pnpm install is unconditional here: release builds must start from a clean dep tree.
 desktop-release-build target="aarch64-apple-darwin":
     #!/usr/bin/env bash
     set -euo pipefail
     TARGET={{target}}
-    mkdir -p desktop/src-tauri/binaries
-    touch "desktop/src-tauri/binaries/buzz-acp-$TARGET"
-    touch "desktop/src-tauri/binaries/buzz-agent-$TARGET"
+    SIDECAR_PACKAGES=(-p buzz-acp -p buzz-agent -p buzz-dev-mcp -p git-credential-nostr -p buzz-cli)
     if [[ "$TARGET" != *windows* ]]; then
-        touch "desktop/src-tauri/binaries/buzz-backend-kubernetes-$TARGET"
+        SIDECAR_PACKAGES+=(-p buzz-backend-kubernetes)
     fi
-    touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
-    touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
-    touch "desktop/src-tauri/binaries/buzz-$TARGET"
+    cargo build --release --target "$TARGET" "${SIDECAR_PACKAGES[@]}"
+    ./scripts/bundle-sidecars.sh "$TARGET"
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
+    cd {{desktop_dir}}
+    pnpm tauri build --bundles app --features mesh-llm --target "$TARGET"
+    if [[ "$TARGET" == *apple-darwin* ]]; then
+        APP_PATH="src-tauri/target/$TARGET/release/bundle/macos/Buzz.app"
+        codesign --force --deep --sign - \
+          --entitlements src-tauri/Entitlements.plist "$APP_PATH"
+        codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+        scripts/verify-macos-entitlements.sh "$APP_PATH"
+        ../scripts/verify-bundled-sidecars.sh "$APP_PATH"
+    fi
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test

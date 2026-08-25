@@ -56,6 +56,8 @@ import {
 import { MessageTimestamp } from "./MessageTimestamp";
 import { SentFromThreadLine } from "./SentFromThreadLine";
 import { WaveMessageAttachment } from "./WaveMessageAttachment";
+import { InteractivePromptCard } from "./InteractivePromptCard";
+import { parseInteractivePrompt } from "@/features/messages/lib/interactivePrompt";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { getAgentAddressMentionPubkeys } from "@/features/messages/lib/agentAddressMention.mjs";
 import { getVisibleAgentAddressPubkeys } from "@/features/messages/lib/getVisibleAgentAddressPubkeys";
@@ -425,7 +427,7 @@ export const MessageRow = React.memo(
             );
           }
 
-          return (
+          const markdown = (
             <VideoReviewCommentMarkdown
               channelNames={channelNames}
               className={cn(
@@ -457,6 +459,25 @@ export const MessageRow = React.memo(
               videoReviewCommentRootId={videoReviewCommentRootId}
               videoReviewContext={videoReviewContext}
             />
+          );
+          const interactivePrompt =
+            message.isAgent &&
+            channelId &&
+            parseInteractivePrompt(message.tags) ? (
+              <InteractivePromptCard
+                channelId={channelId}
+                currentPubkey={currentPubkey}
+                messageId={message.id}
+                tags={message.tags}
+              />
+            ) : null;
+          return interactivePrompt ? (
+            <>
+              {markdown}
+              {interactivePrompt}
+            </>
+          ) : (
+            markdown
           );
         }
       }
@@ -933,6 +954,8 @@ export const MessageRow = React.memo(
     // from parent create new refs every render — including them defeats memo.
   },
   (prev, next) =>
+    prev.channelId === next.channelId &&
+    prev.currentPubkey === next.currentPubkey &&
     prev.message.id === next.message.id &&
     prev.message.pubkey === next.message.pubkey &&
     prev.message.body === next.message.body &&

@@ -16,6 +16,7 @@ mod identity_storage;
 mod initial_window;
 mod key_backup;
 mod link_preview_tags;
+mod local_document;
 mod linux_media;
 #[cfg(target_os = "macos")]
 mod macos_notifications;
@@ -37,6 +38,7 @@ pub mod nostr_convert;
 mod observed_unread;
 mod persona_catalog;
 mod prevent_sleep;
+mod prompt;
 mod ptt_shortcut;
 mod relay;
 mod relay_admission;
@@ -606,6 +608,7 @@ pub fn run() {
             get_relay_http_url,
             get_media_proxy_port,
             fetch_link_preview_metadata,
+            local_document::read_local_document,
             discover_acp_auth_methods,
             discover_acp_providers,
             discover_git_bash_prerequisite,
@@ -646,6 +649,7 @@ pub fn run() {
             get_feed,
             search_messages,
             send_channel_message,
+            send_prompt_response,
             send_managed_agent_channel_message,
             has_managed_agent_channel_message_marker,
             get_forum_posts,

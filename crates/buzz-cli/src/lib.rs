@@ -132,6 +132,23 @@ impl std::fmt::Display for ChannelVisibility {
     }
 }
 
+/// Interactive prompt kinds. Deliberately closed: a prompt kind fixes its own
+/// option set, so callers can never supply arbitrary options or tags.
+#[derive(Clone, clap::ValueEnum)]
+pub enum PromptKind {
+    /// Execution approval — options are the built-in `once` / `deny` pair.
+    #[value(name = "exec-approval")]
+    ExecApproval,
+}
+
+impl std::fmt::Display for PromptKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExecApproval => write!(f, "exec-approval"),
+        }
+    }
+}
+
 #[derive(Clone, clap::ValueEnum)]
 pub enum PresenceStatus {
     #[value(name = "online")]
@@ -395,6 +412,35 @@ pub enum MessagesCmd {
         /// Pubkey to mention (hex or npub; repeatable). Supplying any explicit identity permits unresolved or ambiguous @Name text as presentation-only; uniquely resolved member names still notify.
         #[arg(long = "mention")]
         mentions: Vec<String>,
+    },
+    /// Send an interactive agent prompt to a channel
+    #[command(
+        after_help = "Renders as buttons in clients that understand prompt tags, and as \
+plain text everywhere else — so `--content` must carry the readable request and any typed \
+fallback.\n\nThe option set is fixed by `--prompt-kind`; `exec-approval` always emits exactly \
+`once` (\"Allow once\") and `deny` (\"Deny\"). Only the single `--authorized-responder` \
+identity may answer.\n\nExamples:\n  \
+buzz messages send-prompt --channel <UUID> --content - --prompt-id <ID> --prompt-kind exec-approval --expires-at 1800000060 --authorized-responder <PUBKEY>"
+    )]
+    SendPrompt {
+        /// Channel UUID (from 'buzz channels list')
+        #[arg(long)]
+        channel: String,
+        /// Readable request text plus typed fallback. Use '-' to read from stdin.
+        #[arg(long)]
+        content: String,
+        /// Opaque, unpredictable prompt id (8-64 chars of [A-Za-z0-9._-])
+        #[arg(long)]
+        prompt_id: String,
+        /// Prompt kind — fixes the option set
+        #[arg(long, value_enum)]
+        prompt_kind: PromptKind,
+        /// Unix timestamp when this prompt expires (must be in the future, max 24h out)
+        #[arg(long)]
+        expires_at: i64,
+        /// The single hex pubkey permitted to answer this prompt
+        #[arg(long)]
+        authorized_responder: String,
     },
     /// Send a code diff / patch to a channel
     SendDiff {
@@ -2276,6 +2322,7 @@ mod tests {
                 "search",
                 "send",
                 "send-diff",
+                "send-prompt",
                 "thread",
                 "vote"
             ]
@@ -2410,7 +2457,7 @@ mod tests {
             ("feed", 1),
             ("issues", 6),
             ("media", 1),
-            ("messages", 8),
+            ("messages", 9),
             ("pack", 2),
             ("patches", 4),
             ("pr", 5),
@@ -2588,5 +2635,109 @@ mod tests {
             .is_err(),
             "--visibility chartreuse on update must be rejected at parse time"
         );
+    }
+
+    // ── messages send-prompt ──────────────────────────────────────────────────
+
+    const PROMPT_RESPONDER: &str =
+        "abababababababababababababababababababababababababababababababab";
+
+    fn send_prompt_args(overrides: &[(&str, &str)]) -> Vec<String> {
+        let mut flags = vec![
+            ("--channel", "11111111-2222-3333-4444-555555555555"),
+            ("--content", "-"),
+            ("--prompt-id", "prompt-abc123"),
+            ("--prompt-kind", "exec-approval"),
+            ("--expires-at", "1800000060"),
+            ("--authorized-responder", PROMPT_RESPONDER),
+        ];
+        for (flag, value) in overrides {
+            if let Some(slot) = flags.iter_mut().find(|(f, _)| f == flag) {
+                slot.1 = value;
+            }
+        }
+        let mut args = vec!["buzz".to_string(), "messages".into(), "send-prompt".into()];
+        for (flag, value) in flags {
+            args.push(flag.to_string());
+            args.push(value.to_string());
+        }
+        args
+    }
+
+    /// Locks the exact request interface the Hermes peer invokes.
+    #[test]
+    fn messages_send_prompt_accepts_the_documented_flag_surface() {
+        assert!(
+            Cli::try_parse_from(send_prompt_args(&[])).is_ok(),
+            "the documented send-prompt invocation must parse"
+        );
+    }
+
+    /// Every flag is required — a partially-specified prompt must not reach the relay.
+    #[test]
+    fn messages_send_prompt_requires_every_flag() {
+        for omitted in [
+            "--channel",
+            "--content",
+            "--prompt-id",
+            "--prompt-kind",
+            "--expires-at",
+            "--authorized-responder",
+        ] {
+            let full = send_prompt_args(&[]);
+            let mut args: Vec<String> = Vec::new();
+            let mut skip = false;
+            for arg in full {
+                if arg == omitted {
+                    skip = true;
+                    continue;
+                }
+                if skip {
+                    skip = false;
+                    continue;
+                }
+                args.push(arg);
+            }
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "send-prompt without {omitted} must be rejected at parse time"
+            );
+        }
+    }
+
+    /// The prompt kind is a closed set — callers cannot invent one.
+    #[test]
+    fn messages_send_prompt_rejects_unknown_prompt_kinds() {
+        assert!(
+            Cli::try_parse_from(send_prompt_args(&[("--prompt-kind", "shell-exec")])).is_err(),
+            "--prompt-kind shell-exec must be rejected at parse time"
+        );
+    }
+
+    /// A non-numeric expiry is a parse error, not a silently-dropped tag value.
+    #[test]
+    fn messages_send_prompt_rejects_non_numeric_expiry() {
+        assert!(
+            Cli::try_parse_from(send_prompt_args(&[("--expires-at", "tomorrow")])).is_err(),
+            "--expires-at tomorrow must be rejected at parse time"
+        );
+    }
+
+    /// There is no flag for supplying options or extra tags — the kind fixes them.
+    #[test]
+    fn messages_send_prompt_has_no_arbitrary_tag_or_option_flags() {
+        for (flag, value) in [
+            ("--prompt-option", "sudo|Run as root|primary"),
+            ("--tag", "p"),
+            ("--authorized-responder-2", PROMPT_RESPONDER),
+        ] {
+            let mut args = send_prompt_args(&[]);
+            args.push(flag.to_string());
+            args.push(value.to_string());
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "{flag} must not be an accepted send-prompt flag"
+            );
+        }
     }
 }

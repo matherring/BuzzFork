@@ -542,6 +542,119 @@ pub async fn send_channel_message(
     })
 }
 
+/// Why a prompt response was refused before anything was signed.
+///
+/// Split out from the command so the whole authorization decision is a pure
+/// function over `(signed request event, channel, click payload, responder,
+/// clock)` — the command only supplies those inputs.
+fn authorize_prompt_response(
+    request: &Event,
+    channel_id: &str,
+    request_event_id: &str,
+    prompt_id: &str,
+    option_id: &str,
+    responder_pubkey: &str,
+    now: i64,
+) -> Result<(crate::prompt::PromptRequest, String), String> {
+    if request.id.to_hex() != request_event_id.to_ascii_lowercase() {
+        return Err("prompt request event id mismatch".into());
+    }
+    let request_channel = request
+        .tags
+        .iter()
+        .find(|tag| tag.as_slice().first().map(String::as_str) == Some("h"))
+        .and_then(|tag| tag.as_slice().get(1).cloned())
+        .ok_or_else(|| "prompt request has no channel".to_string())?;
+    if request_channel != channel_id {
+        return Err("prompt request belongs to a different channel".into());
+    }
+
+    let parsed = crate::prompt::parse_prompt_request(&crate::prompt::event_tag_vecs(request))
+        .ok_or_else(|| "event is not a valid prompt request".to_string())?;
+    if parsed.prompt_id != prompt_id {
+        return Err("prompt id mismatch".into());
+    }
+    let option = parsed
+        .option(option_id)
+        .ok_or_else(|| format!("unknown prompt option id: {option_id}"))?;
+    if parsed.authorized_responder != responder_pubkey.to_ascii_lowercase() {
+        return Err("this identity is not the authorized responder".into());
+    }
+    if !parsed.is_live_at(now) {
+        return Err("this prompt has expired".into());
+    }
+
+    let content = crate::prompt::prompt_response_content(&option.label);
+    Ok((parsed.clone(), content))
+}
+
+/// Reply to an interactive prompt with a signed, descriptive kind 9 response.
+///
+/// The renderer supplies only `(channel, request event id, prompt id, option
+/// id)`. Everything that decides whether the response may be signed — the
+/// authorized responder, the option set, the expiry, the agent to notify — is
+/// re-read from the signed request event fetched from the relay, so a disabled
+/// button in the UI is presentation, not the authorization boundary.
+#[tauri::command]
+pub async fn send_prompt_response(
+    channel_id: String,
+    request_event_id: String,
+    prompt_id: String,
+    option_id: String,
+    state: State<'_, AppState>,
+) -> Result<SendChannelMessageResponse, String> {
+    let channel_uuid = uuid::Uuid::parse_str(&channel_id)
+        .map_err(|_| format!("invalid channel UUID: {channel_id}"))?;
+    let request_eid = EventId::from_hex(&request_event_id)
+        .map_err(|e| format!("invalid prompt request event ID: {e}"))?;
+
+    let responder_pubkey = {
+        let keys = state.keys.lock().map_err(|e| e.to_string())?;
+        keys.public_key().to_hex()
+    };
+
+    let events = query_relay(
+        &state,
+        &[serde_json::json!({
+            "ids": [request_eid.to_hex()],
+            "kinds": [buzz_core_pkg::kind::KIND_STREAM_MESSAGE],
+            "limit": 1
+        })],
+    )
+    .await?;
+    let request = events
+        .first()
+        .ok_or_else(|| "prompt request event not found".to_string())?;
+
+    let (_parsed, content) = authorize_prompt_response(
+        request,
+        &channel_id,
+        &request_event_id,
+        &prompt_id,
+        &option_id,
+        &responder_pubkey,
+        chrono::Utc::now().timestamp(),
+    )?;
+
+    let builder = events::build_prompt_response(
+        channel_uuid,
+        request_eid,
+        &prompt_id,
+        &option_id,
+        &request.pubkey.to_hex(),
+        &content,
+    )?;
+    let result = submit_event(builder, &state).await?;
+
+    Ok(SendChannelMessageResponse {
+        event_id: result.event_id,
+        root_event_id: Some(request_event_id.clone()),
+        parent_event_id: Some(request_event_id),
+        depth: 1,
+        created_at: chrono::Utc::now().timestamp(),
+    })
+}
+
 fn event_has_client_marker(event: &Event, marker: &str) -> bool {
     event.tags.iter().any(|tag| {
         let parts = tag.as_slice();

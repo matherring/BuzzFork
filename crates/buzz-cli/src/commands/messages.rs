@@ -778,6 +778,44 @@ pub async fn cmd_send_message(
     Ok(())
 }
 
+pub struct SendPromptParams {
+    pub channel_id: String,
+    pub content: String,
+    pub prompt_id: String,
+    pub prompt_kind: crate::PromptKind,
+    pub expires_at: i64,
+    pub authorized_responder: String,
+}
+
+/// Send an interactive agent prompt (kind 9 with bounded `prompt` tags).
+///
+/// Deliberately narrower than `cmd_send_message`: no media, no threading, and
+/// no @mention scanning. The only `p` tag is the authorized responder, so a
+/// command string in the content can never widen the prompt's audience, and the
+/// option set comes from the prompt kind rather than caller input.
+pub async fn cmd_send_prompt(client: &BuzzClient, mut p: SendPromptParams) -> Result<(), CliError> {
+    p.content = read_or_stdin(&p.content)?;
+    validate_content_size(&p.content)?;
+    let channel_uuid = parse_uuid(&p.channel_id)?;
+    validate_hex64(&p.authorized_responder)?;
+
+    let builder = match p.prompt_kind {
+        crate::PromptKind::ExecApproval => buzz_sdk::prompt::build_exec_approval_prompt(
+            channel_uuid,
+            &p.content,
+            &p.prompt_id,
+            p.expires_at,
+            &p.authorized_responder,
+        )
+        .map_err(|e| CliError::Usage(format!("invalid prompt request: {e}")))?,
+    };
+
+    let event = client.sign_event(builder)?;
+    let resp = client.submit_event(event).await?;
+    println!("{}", normalize_write_response(&resp));
+    Ok(())
+}
+
 pub struct SendDiffParams {
     pub channel_id: String,
     pub diff: String,
@@ -977,6 +1015,27 @@ pub async fn dispatch(
                     broadcast,
                     files,
                     mentions,
+                },
+            )
+            .await
+        }
+        MessagesCmd::SendPrompt {
+            channel,
+            content,
+            prompt_id,
+            prompt_kind,
+            expires_at,
+            authorized_responder,
+        } => {
+            cmd_send_prompt(
+                client,
+                SendPromptParams {
+                    channel_id: channel,
+                    content,
+                    prompt_id,
+                    prompt_kind,
+                    expires_at,
+                    authorized_responder,
                 },
             )
             .await

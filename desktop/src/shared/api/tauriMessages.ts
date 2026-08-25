@@ -48,3 +48,23 @@ export async function sendChannelMessage(
     createdAt: response.created_at,
   };
 }
+
+export async function sendPromptResponse(
+  channelId: string,
+  requestEventId: string,
+  promptId: string,
+  optionId: "once" | "deny",
+): Promise<SendChannelMessageResult> {
+  const response = await invokeTauri<RawSendChannelMessageResult>(
+    "send_prompt_response",
+    { channelId, requestEventId, promptId, optionId },
+  );
+
+  return {
+    eventId: response.event_id,
+    parentEventId: response.parent_event_id,
+    rootEventId: response.root_event_id,
+    depth: response.depth,
+    createdAt: response.created_at,
+  };
+}

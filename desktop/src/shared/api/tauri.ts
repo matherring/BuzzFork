@@ -42,7 +42,10 @@ import type {
 } from "@/shared/api/types";
 
 export * from "@/shared/api/tauriChannels";
-export { sendChannelMessage } from "@/shared/api/tauriMessages";
+export {
+  sendChannelMessage,
+  sendPromptResponse,
+} from "@/shared/api/tauriMessages";
 export { getEventById, getEventsByIds } from "@/shared/api/tauriEvents";
 
 type RawPresenceLookup = Record<string, PresenceStatus>;
