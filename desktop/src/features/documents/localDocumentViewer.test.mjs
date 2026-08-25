@@ -75,6 +75,24 @@ test("carries a declared SHA-256 into a local-file reference", () => {
     expectedSha256: hash,
     path,
   });
+  assert.doesNotMatch(output, /\s\(sha256\s+[a-f0-9]{64}\)/i);
+});
+
+test("round-trips the serialized local link from a space-containing message path", () => {
+  const hash = "b".repeat(64);
+  const path = "/private/tmp/Buzz Viewer Evidence/quarterly report.md";
+  const output = linkifyLocalDocumentPaths(
+    `Open ${path} (sha256 ${hash}) before the review.`,
+  );
+  const href = output.match(/\((buzz-local-file:[^)]+)\)/)?.[1];
+
+  assert.ok(href, "the message path becomes a local-file link");
+  assert.deepEqual(localFileReferenceFromHref(href), {
+    expectedSha256: hash,
+    path,
+  });
+  assert.doesNotMatch(output, /quarterly\]$/);
+  assert.doesNotMatch(output, /\s\(sha256\s+[a-f0-9]{64}\)/i);
 });
 
 test("linkifies unsupported absolute paths as Finder-only local files", () => {

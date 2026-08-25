@@ -8933,6 +8933,31 @@ async function resolveMockUploadDescriptors(
   ];
 }
 
+function mockPdfContentBase64() {
+  const stream = "BT /F1 18 Tf 72 720 Td (Buzz packaged PDF preview) Tj ET";
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (const offset of offsets.slice(1)) {
+    pdf += `${offset.toString().padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return window.btoa(pdf);
+}
+
 async function resolveMockUploadDescriptorForBytes(
   args: { data: number[] | Uint8Array; filename?: string | null },
   config: E2eConfig | undefined,
@@ -12685,14 +12710,14 @@ export function maybeInstallE2eTauriMocks() {
           };
         }
         if (extension === "pdf") {
-          const pdf = "%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+          const contentBase64 = mockPdfContentBase64();
           return {
             status: "pdf",
             source: path,
             file_name: filename,
             extension,
-            content_base64: window.btoa(pdf),
-            bytes_total: pdf.length,
+            content_base64: contentBase64,
+            bytes_total: window.atob(contentBase64).length,
           };
         }
         const content =
@@ -12723,14 +12748,14 @@ export function maybeInstallE2eTauriMocks() {
         };
         const extension = filename.split(".").at(-1)?.toLowerCase() ?? "txt";
         if (extension === "pdf") {
-          const pdf = "%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+          const contentBase64 = mockPdfContentBase64();
           return {
             status: "pdf",
             source: url,
             file_name: filename,
             extension,
-            content_base64: window.btoa(pdf),
-            bytes_total: pdf.length,
+            content_base64: contentBase64,
+            bytes_total: window.atob(contentBase64).length,
           };
         }
         const content = "name,value\nanswer,42\n";
