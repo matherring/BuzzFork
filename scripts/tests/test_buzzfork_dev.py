@@ -102,6 +102,27 @@ class PureChecksTest(unittest.TestCase):
                 Path("/tmp/custom-buzzfork-target").resolve(),
             )
 
+    def test_global_buzz_inspection_reports_deleted_bundle_path(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["lsof"],
+            0,
+            stdout=(
+                "p123\n"
+                "ftxt\n"
+                "n/private/tmp/removed/Buzz.app/Contents/MacOS/buzz-desktop (deleted)\n"
+            ),
+            stderr="",
+        )
+        with mock.patch.object(buzzfork_dev.shutil, "which", return_value="/usr/sbin/lsof"), mock.patch.object(
+            buzzfork_dev.subprocess, "run", return_value=result
+        ):
+            inspection = buzzfork_dev.running_buzz_bundle_processes()
+        self.assertTrue(inspection.available)
+        self.assertEqual(
+            inspection.paths,
+            (Path("/private/tmp/removed/Buzz.app/Contents/MacOS/buzz-desktop (deleted)"),),
+        )
+
 
 class WorktreeIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -239,6 +260,8 @@ class DesktopLifecycleTest(unittest.TestCase):
         self.paths.candidate.mkdir()
         with mock.patch.object(buzzfork_dev, "install_paths", return_value=self.paths), mock.patch.object(
             buzzfork_dev, "processes_using_path", self.clear_processes
+        ), mock.patch.object(
+            buzzfork_dev, "running_buzz_bundle_processes", return_value=buzzfork_dev.ProcessInspection(True)
         ), mock.patch.object(buzzfork_dev, "validate_bundle", return_value=self.identity):
             self.assertEqual(buzzfork_dev.command_promote(argparse.Namespace(execute=False)), 0)
         self.assertTrue(self.paths.stable.exists())
@@ -251,6 +274,8 @@ class DesktopLifecycleTest(unittest.TestCase):
         (self.paths.candidate / "new").mkdir(parents=True)
         with mock.patch.object(buzzfork_dev, "install_paths", return_value=self.paths), mock.patch.object(
             buzzfork_dev, "processes_using_path", self.clear_processes
+        ), mock.patch.object(
+            buzzfork_dev, "running_buzz_bundle_processes", return_value=buzzfork_dev.ProcessInspection(True)
         ), mock.patch.object(buzzfork_dev, "validate_bundle", return_value=self.identity):
             self.assertEqual(buzzfork_dev.command_promote(argparse.Namespace(execute=True)), 0)
             self.assertTrue((self.paths.stable / "new").exists())

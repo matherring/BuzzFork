@@ -33,6 +33,7 @@ EXIT_REFUSED = 75
 EXPECTED_BUNDLE_ID = "xyz.block.buzz.app"
 DESKTOP_EXECUTABLE = "buzz-desktop"
 REQUIRED_SIDECARS = ("buzz-acp", "buzz-agent", "buzz-backend-kubernetes", "buzz-dev-mcp", "git-credential-nostr", "buzz")
+BUNDLED_EXECUTABLES = (DESKTOP_EXECUTABLE, *REQUIRED_SIDECARS)
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -161,6 +162,46 @@ def _lsof_paths(path: Path) -> ProcessInspection:
 
 
 def processes_using_path(path: Path) -> ProcessInspection: return _lsof_paths(path)
+
+
+def running_buzz_bundle_processes() -> ProcessInspection:
+    """Find Buzz executables by their full open path, including deleted bundles.
+
+    ``lsof +D`` cannot inspect a bundle after its directory has been removed.
+    A global, field-formatted lsof listing lets the promotion gate see a deleted
+    desktop or bundled harness without trusting the process command name.
+    """
+    if shutil.which("lsof") is None:
+        return ProcessInspection(False, detail="lsof is unavailable")
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", "-Fpcfn"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return ProcessInspection(False, detail=f"global lsof inspection failed: {error}")
+    if result.returncode not in (0, 1):
+        return ProcessInspection(False, detail=f"global lsof inspection failed: {result.stderr.strip() or result.returncode}")
+    if result.returncode == 1:
+        return ProcessInspection(True)
+
+    matches: list[Path] = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("n") or len(line) == 1:
+            continue
+        raw_path = line[1:]
+        clean_path = raw_path.removesuffix(" (deleted)")
+        candidate = Path(clean_path)
+        if (
+            ".app/Contents/MacOS/" in clean_path
+            and candidate.name in BUNDLED_EXECUTABLES
+        ):
+            display = Path(raw_path)
+            if display not in matches:
+                matches.append(display)
+    return ProcessInspection(True, tuple(matches))
 
 
 def path_process_errors(paths: Sequence[Path], *, inspector=processes_using_path) -> list[str]:
@@ -360,6 +401,11 @@ def command_promote(args: argparse.Namespace) -> int:
     paths = install_paths()
     if not paths.candidate.exists(): return report_refusal([f"no candidate exists at {paths.candidate}"])
     errors = path_process_errors([paths.stable, paths.candidate, paths.previous, paths.prestage, paths.retired])
+    active_bundles = running_buzz_bundle_processes()
+    if not active_bundles.available:
+        errors.append(f"cannot safely inspect all running Buzz bundles: {active_bundles.detail}")
+    elif active_bundles.paths:
+        errors.append("Buzz desktop or a bundled harness is still running: " + ", ".join(str(path) for path in active_bundles.paths))
     if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
     identity = validate_bundle(paths.candidate); print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: promote {paths.candidate} to {paths.stable}, retaining one rollback at {paths.previous}")
     if not args.execute: return 0
