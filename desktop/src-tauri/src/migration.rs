@@ -1497,7 +1497,6 @@ use fold::load_persona_runtimes;
 mod backfill;
 pub use backfill::backfill_standalone_agents;
 mod detach;
-pub use detach::detach_directory_backed_teams;
 mod pollen;
 mod team_membership;
 pub(crate) use pollen::*;

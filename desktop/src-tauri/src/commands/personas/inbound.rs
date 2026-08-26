@@ -250,7 +250,7 @@ fn reconcile_inbound_persona_event_blocking(
     // their arrival in retention (so the same historical head does not win a
     // later conflict), but never materialize them into this profile again.
     if !should_materialize_inbound(kind, &d_tag) {
-        return Ok(());
+        return Ok(None);
     }
     match kind {
         KIND_PERSONA => {
