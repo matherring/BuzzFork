@@ -46,6 +46,11 @@ jobs:
               - 'deny.toml'
               - '.github/workflows/ci.yml'
               - 'scripts/run-tests.sh'
+              - 'scripts/buzzfork_build_guard.py'
+              - 'scripts/buzzfork_dev.py'
+              - 'scripts/tests/test_buzzfork_dev.py'
+              - 'docs/development-storage.md'
+              - 'AGENTS.md'
               - 'justfile'
             desktop:
               - 'scripts/check-file-sizes-core.mjs'
@@ -90,6 +95,8 @@ jobs:
         run: scripts/test-mobile-worktree-overrides.sh
       - name: File size ratchet unit tests
         run: node --test scripts/check-file-sizes-core.test.mjs
+      - name: BuzzFork development workflow tests
+        run: python3 -m unittest scripts/tests/test_buzzfork_dev.py
 
   rust-lint:
     name: Rust Lint
