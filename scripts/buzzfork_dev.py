@@ -298,10 +298,12 @@ def exact_stage_errors(repo: Path, sha: str, worktrees: Sequence[Worktree], path
     if resolved.returncode or resolved.stdout.strip() != sha: errors.append("the requested SHA does not resolve exactly to a local commit")
     if git(repo, ["rev-parse", "HEAD"]).stdout.strip() != sha: errors.append("the source checkout is not at the requested exact SHA")
     if git(repo, ["status", "--porcelain=v1", "--untracked-files=all"]).stdout.strip(): errors.append("the source checkout is dirty")
-    if not git(repo, ["branch", "-r", "--contains", sha], check=False).stdout.strip(): errors.append("the requested SHA is not pushed to an origin remote ref")
+    remote_refs = git(repo, ["branch", "-r", "--contains", sha], check=False).stdout.splitlines()
+    if not any(ref.strip().startswith("origin/") for ref in remote_refs): errors.append("the requested SHA is not pushed to an origin remote ref")
     if sum(not item.primary for item in worktrees) > MAX_AUXILIARY_WORKTREES: errors.append("the registered worktree budget is breached")
     if paths.candidate.exists() or paths.candidate.is_symlink(): errors.append(f"a candidate already exists: {paths.candidate}")
     if paths.journal.exists(): errors.append(f"a transaction recovery journal is pending: {paths.journal}")
+    if paths.lock.exists(): errors.append(f"another build, promotion, rollback, or cleanup owns {paths.lock}")
     return errors
 
 
@@ -416,12 +418,12 @@ def command_promote(args: argparse.Namespace) -> int:
     paths = install_paths()
     if not paths.candidate.exists(): return report_refusal([f"no candidate exists at {paths.candidate}"])
     promotion_slots = [paths.stable, paths.candidate, paths.previous, paths.prestage, paths.retired]
-    errors = stopped_buzz_errors(promotion_slots)
+    errors = ensure_disk_floor(paths.stable) + stopped_buzz_errors(promotion_slots)
     if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
     identity = validate_bundle(paths.candidate); print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: promote {paths.candidate} to {paths.stable}, retaining one rollback at {paths.previous}")
     if not args.execute: return 0
     with build_lock(paths):
-        errors = stopped_buzz_errors(promotion_slots)
+        errors = ensure_disk_floor(paths.stable) + stopped_buzz_errors(promotion_slots)
         if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
         recover_transaction(paths)
         if not paths.stable.exists(): return report_refusal([f"live stable app is missing: {paths.stable}"])
