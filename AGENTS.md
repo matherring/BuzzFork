@@ -142,6 +142,22 @@ Additional rules:
 - Do not introduce new `unwrap()` or `expect()` in production paths — use `?` and proper error types
 - New public API must have doc comments
 
+## BuzzFork desktop updates
+
+For this private toy fork, use the existing deterministic lifecycle rather
+than ad-hoc desktop builds or a vanilla upstream app. From a clean auxiliary
+worktree, the normal unattended local update is:
+
+```bash
+python3 scripts/buzzfork_dev.py upgrade --deploy --execute
+```
+
+It discovers the latest official desktop tag, builds once, promotes the
+canonical `/Applications/Buzz.app`, verifies it, and cleans temporary output
+while retaining one rollback. Hosted CI is optional (`--require-hosted-ci`).
+If the current macOS account cannot write `/Applications`, run the command
+from a root-capable administrator session. See `docs/development-storage.md`.
+
 ---
 
 ## Key Patterns
