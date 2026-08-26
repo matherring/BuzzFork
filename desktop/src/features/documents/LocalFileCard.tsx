@@ -48,6 +48,7 @@ export function LocalFileCard({
   const filename = filenameFromPath(reference.path);
   const previewable = canPreviewDocument(reference.path);
   const externalActionLabel = localFileExternalActionLabel(reference.path);
+  const showPreviewAction = externalActionLabel !== "Open externally";
 
   const openDefault = React.useCallback(() => {
     void invokeTauri("open_local_document", {
@@ -89,7 +90,7 @@ export function LocalFileCard({
   }, [openDefault, previewable, reference]);
 
   const menuItems = [
-    ...(previewable
+    ...(showPreviewAction
       ? [
           {
             label: "Open in Buzz Preview",
