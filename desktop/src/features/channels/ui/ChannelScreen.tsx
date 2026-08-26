@@ -57,8 +57,6 @@ import { ProfilePanelProvider } from "@/shared/context/ProfilePanelContext";
 import { useMainInsetRef } from "@/shared/layout/MainInsetContext";
 import { channelContentTopPaddingMeasurement } from "@/shared/layout/chromeLayout";
 import { useMeasuredCssVariable } from "@/shared/layout/useMeasuredCssVariable";
-import { useElementWidth } from "@/shared/hooks/use-mobile";
-import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
 import { AUXILIARY_PANEL_SINGLE_COLUMN_BREAKPOINT_PX } from "@/shared/layout/AuxiliaryPanel";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useChannelActivityTyping } from "./useChannelActivityTyping";
@@ -73,6 +71,7 @@ import { useChannelUnreadState } from "./useChannelUnreadState";
 import type { ChannelScreenProps } from "./ChannelScreen.types";
 import { GuardedChannelPane } from "./GuardedChannelPane";
 import { useNavigationGuard } from "./useNavigationGuard";
+import { useChannelThreadPanelWidth } from "./useChannelThreadPanelWidth";
 import * as searchForwarding from "./searchTargetForwarding";
 const EMPTY_RELAY_EVENTS: RelayEvent[] = [];
 export function ChannelScreen({
@@ -129,14 +128,7 @@ export function ChannelScreen({
     setProfilePanelPubkey,
     setProfilePanelView,
   } = useChannelPanelHistoryState();
-  const [channelContentRef, channelContentWidthPx] =
-    useElementWidth<HTMLDivElement>();
-  const {
-    canReset: canResetThreadPanelWidth,
-    onResetWidth: handleThreadPanelWidthReset,
-    onResizeStart: handleThreadPanelResizeStart,
-    widthPx: threadPanelWidthPx,
-  } = useThreadPanelWidth(channelContentWidthPx || undefined);
+  const channelThreadPanel = useChannelThreadPanelWidth();
   const [isMembersSidebarOpen, setIsMembersSidebarOpen] = React.useState(false);
   const [isAddBotOpen, setIsAddBotOpen] = React.useState(false);
   const [expandedThreadReplyIds, setExpandedThreadReplyIds] = React.useState(
@@ -695,16 +687,17 @@ export function ChannelScreen({
     effectiveOpenThreadHeadId && activeChannel && !displayedThreadHeadMessage,
   );
   const isNarrowPanelViewport =
-    channelContentWidthPx > 0 &&
-    channelContentWidthPx < AUXILIARY_PANEL_SINGLE_COLUMN_BREAKPOINT_PX;
+    channelThreadPanel.contentWidthPx > 0 &&
+    channelThreadPanel.contentWidthPx <
+      AUXILIARY_PANEL_SINGLE_COLUMN_BREAKPOINT_PX;
   const isSinglePanelView =
     isNarrowPanelViewport &&
     activeChannel?.channelType !== "forum" &&
     hasAuxiliaryPanel;
   const shouldCompactHeaderActions =
     hasAuxiliaryPanel &&
-    channelContentWidthPx > 0 &&
-    channelContentWidthPx < 760;
+    channelThreadPanel.contentWidthPx > 0 &&
+    channelThreadPanel.contentWidthPx < 760;
   const channelHeaderChromeRef = useMeasuredCssVariable({
     targetRef: mainInsetRef,
     ...channelContentTopPaddingMeasurement,
@@ -810,13 +803,13 @@ export function ChannelScreen({
         />
         <div
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-          ref={channelContentRef}
+          ref={channelThreadPanel.channelContentRef}
         >
           {activeChannel ? (
             activeChannel.channelType === "forum" ? (
               searchForwarding.renderSearchAwareForum(
                 <ForumChannelContent
-                  canResetPanelWidth={canResetThreadPanelWidth}
+                  canResetPanelWidth={channelThreadPanel.canReset}
                   channel={activeChannel}
                   currentPubkey={currentPubkey}
                   header={channelHeader}
@@ -824,12 +817,12 @@ export function ChannelScreen({
                   onCloseProfilePanel={handleCloseProfilePanel}
                   onOpenDm={handleOpenDm}
                   onOpenProfilePanel={handleOpenProfilePanel}
-                  onPanelResizeStart={handleThreadPanelResizeStart}
+                  onPanelResizeStart={channelThreadPanel.onResize}
                   onProfilePanelTabChange={setProfilePanelTab}
                   onProfilePanelViewChange={setProfilePanelView}
-                  onResetPanelWidth={handleThreadPanelWidthReset}
+                  onResetPanelWidth={channelThreadPanel.onReset}
                   onSelectPost={onSelectForumPost}
-                  panelWidthPx={threadPanelWidthPx}
+                  panelWidthPx={channelThreadPanel.widthPx}
                   profilePanelPubkey={profilePanelPubkey}
                   profilePanelTab={profilePanelTab}
                   profilePanelView={profilePanelView}
@@ -858,7 +851,7 @@ export function ChannelScreen({
                     botTypingEntries={botTypingEntries}
                     channelManagementOpen={channelManagementOpen}
                     currentPubkey={currentPubkey}
-                    canResetThreadPanelWidth={canResetThreadPanelWidth}
+                    canResetThreadPanelWidth={channelThreadPanel.canReset}
                     fetchOlder={fetchOlder}
                     header={channelHeader}
                     hasOlderMessages={hasOlderMessages}
@@ -932,7 +925,7 @@ export function ChannelScreen({
                     onOpenAgentSession={handleOpenAgentSession}
                     onOpenDm={handleOpenDm}
                     onOpenProfilePanel={handleOpenProfilePanel}
-                    onResetThreadPanelWidth={handleThreadPanelWidthReset}
+                    onResetThreadPanelWidth={channelThreadPanel.onReset}
                     onCloseProfilePanel={handleCloseProfilePanel}
                     onOpenThread={handleOpenThreadAndCloseAgentSession}
                     onSelectThreadReplyTarget={handleSelectThreadReplyTarget}
@@ -943,7 +936,7 @@ export function ChannelScreen({
                     onThreadScrollTargetResolved={() =>
                       setThreadScrollTargetId(null)
                     }
-                    onThreadPanelResizeStart={handleThreadPanelResizeStart}
+                    onThreadPanelResizeStart={channelThreadPanel.onResize}
                     onTargetReached={() =>
                       clearMessageRouteTarget({ replace: true })
                     }
@@ -971,7 +964,7 @@ export function ChannelScreen({
                     onRetryThreadReplies={() => {
                       void threadRepliesQuery.refetch();
                     }}
-                    threadPanelWidthPx={threadPanelWidthPx}
+                    threadPanelWidthPx={channelThreadPanel.widthPx}
                     threadTypingPubkeys={threadTypingPubkeys}
                     threadReplyTargetMessage={displayedThreadReplyTargetMessage}
                     threadScrollTargetId={threadScrollTargetId}

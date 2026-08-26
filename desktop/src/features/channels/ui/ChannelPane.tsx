@@ -1,5 +1,4 @@
 import * as React from "react";
-import { toast } from "sonner";
 import { Hash, LogIn } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
@@ -25,10 +24,8 @@ import {
   hasOtherDmParticipant,
 } from "@/features/channels/lib/dmHuddleMembers";
 import { buildVideoReviewPresentationByMessageId } from "@/features/messages/lib/videoReviewContext";
-import { isThreadReply } from "@/features/messages/lib/threading";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
-import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
 import { DocumentViewerPane } from "@/features/documents/DocumentViewerPane";
 import { closeDocumentViewer } from "@/features/documents/localDocumentViewer";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
@@ -58,6 +55,8 @@ import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types"
 import * as agentSessionSelection from "@/features/channels/ui/agentSessionSelection";
 import { usePrepareDmSendChannel } from "@/features/channels/ui/usePrepareDmSendChannel";
 import { useChannelPaneMessages } from "@/features/channels/ui/useChannelPaneMessages";
+import { useDocumentViewerPaneCoordination } from "@/features/channels/ui/useDocumentViewerPaneCoordination";
+import { useChannelPaneRoutedEdit } from "@/features/channels/ui/useChannelPaneRoutedEdit";
 import { Button } from "@/shared/ui/button";
 import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRenderScopedReactionHydration";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -449,57 +448,16 @@ export const ChannelPane = React.memo(function ChannelPane({
     useFocusThreadDrawer,
     onCloseThread,
   );
-  const pendingMainEditRef = React.useRef<TimelineMessage | null>(null);
-  const editTargetRef = React.useRef(editTarget);
-  editTargetRef.current = editTarget;
-  const pendingMainEditContextRef = React.useRef({
-    channelId: activeChannel?.id ?? null,
-    threadId: threadHeadMessage?.id ?? null,
+  const handleRoutedEdit = useChannelPaneRoutedEdit({
+    activeChannelId: activeChannel?.id ?? null,
+    channelIsCovered,
+    editTarget,
+    isSinglePanelView,
+    onCloseThread,
+    onEdit,
+    threadHeadMessageId: threadHeadMessage?.id ?? null,
+    useFocusThreadDrawer,
   });
-  const pendingMainEditContext = {
-    channelId: activeChannel?.id ?? null,
-    threadId: threadHeadMessage?.id ?? null,
-  };
-  const previousPendingContext = pendingMainEditContextRef.current;
-  if (
-    previousPendingContext.channelId !== pendingMainEditContext.channelId ||
-    (previousPendingContext.threadId !== null &&
-      pendingMainEditContext.threadId !== null &&
-      previousPendingContext.threadId !== pendingMainEditContext.threadId)
-  ) {
-    pendingMainEditRef.current = null;
-  }
-  pendingMainEditContextRef.current = pendingMainEditContext;
-  const handleRoutedEdit = React.useCallback(
-    (message: TimelineMessage): boolean => {
-      const currentEditTarget = editTargetRef.current;
-      if (
-        currentEditTarget &&
-        currentEditTarget.id !== message.id &&
-        currentEditTarget.isThreadReply !== isThreadReply(message.tags ?? [])
-      ) {
-        pendingMainEditRef.current = null;
-        toast.info("Finish or cancel your edit first.");
-        return false;
-      }
-      if (currentEditTarget?.id === message.id) {
-        pendingMainEditRef.current = null;
-        onEdit?.(message);
-        return true;
-      }
-      if (
-        !isThreadReply(message.tags ?? []) &&
-        (isSinglePanelView || useFocusThreadDrawer)
-      ) {
-        pendingMainEditRef.current = message;
-        onCloseThread();
-        return true;
-      }
-      onEdit?.(message);
-      return Boolean(onEdit);
-    },
-    [isSinglePanelView, onCloseThread, onEdit, useFocusThreadDrawer],
-  );
   const handleEditLastOwnMainMessage = React.useCallback((): boolean => {
     const target = findLastOwnEditable(
       mainTimelineEntries.map((entry) => entry.message),
@@ -518,12 +476,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     threadHeadMessage,
     threadMessages,
   ]);
-  React.useEffect(() => {
-    const pendingMainEdit = pendingMainEditRef.current;
-    if (!pendingMainEdit || isSinglePanelView || channelIsCovered) return;
-    pendingMainEditRef.current = null;
-    onEdit?.(pendingMainEdit);
-  }, [channelIsCovered, isSinglePanelView, onEdit]);
   const { changeThreadViewMode, layoutScrollTargetId, resolveScrollTarget } =
     useThreadViewModeSwitch({
       activeThreadHeadId: threadHeadMessage?.id ?? null,
@@ -541,9 +493,24 @@ export const ChannelPane = React.memo(function ChannelPane({
       }),
     [agentSessionAgents, openAgentSessionPubkey, profilePanelPubkey, profiles],
   );
+  const documentViewerRequest = useDocumentViewerPaneCoordination({
+    activeChannelId: activeChannel?.id ?? null,
+    channelManagementOpen,
+    onCloseAgentSession,
+    onCloseChannelManagement,
+    onCloseProfilePanel,
+    onCloseThread,
+    openThreadHeadId,
+    profilePanelPubkey: profilePanelPubkey ?? null,
+    selectedAgentPubkey:
+      activeChannel && selectedAgent ? selectedAgent.pubkey : null,
+    shouldShowThreadSkeleton,
+    threadHeadMessageId: threadHeadMessage?.id ?? null,
+  });
   const hasSplitAuxiliaryPane =
     useSplitAuxiliaryPane &&
-    (channelManagementOpen ||
+    (Boolean(documentViewerRequest) ||
+      channelManagementOpen ||
       Boolean(threadHeadMessage) ||
       shouldShowThreadSkeleton ||
       Boolean(activeChannel && selectedAgent) ||
@@ -836,7 +803,21 @@ export const ChannelPane = React.memo(function ChannelPane({
        * frozen snapshot because the panel is fully prop-driven.
        */}
       <AnimatePresence onExitComplete={markExitComplete}>
-        {channelManagementOpen && activeChannel ? (
+        {documentViewerRequest ? (
+          wrapAux(
+            <DocumentViewerPane
+              isSinglePanelView={
+                useSplitAuxiliaryPane ? false : isSinglePanelView
+              }
+              layout={useSplitAuxiliaryPane ? "split" : "standalone"}
+              onClose={closeDocumentViewer}
+              request={documentViewerRequest}
+              transparentChrome={useSplitAuxiliaryPane}
+              widthPx={threadPanelWidthPx}
+            />,
+            "document-viewer-panel",
+          )
+        ) : channelManagementOpen && activeChannel ? (
           <ChannelManagementAuxiliaryPanel
             activeChannel={activeChannel}
             canResetThreadPanelWidth={canResetThreadPanelWidth}

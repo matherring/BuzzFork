@@ -188,7 +188,8 @@ export function buzzDeepLinkUrlTransform(value: string, key: string): string {
     value.startsWith("buzz-local-file:") ||
     isMessageLink(value) ||
     isChannelLink(value)
-  ) return value;
+  )
+    return value;
   if (parseEntityLink(value).ok) return value;
   return defaultUrlTransform(value);
 }
