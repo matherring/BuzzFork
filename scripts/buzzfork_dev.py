@@ -37,6 +37,8 @@ DESKTOP_EXECUTABLE = "buzz-desktop"
 REQUIRED_SIDECARS = ("buzz-acp", "buzz-agent", "buzz-backend-kubernetes", "buzz-dev-mcp", "git-credential-nostr", "buzz")
 BUNDLED_EXECUTABLES = (DESKTOP_EXECUTABLE, *REQUIRED_SIDECARS)
 SHA = re.compile(r"^[0-9a-f]{40}$")
+DESKTOP_RELEASE_TAG = re.compile(r"^desktop-v(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)$")
+OFFICIAL_BUZZ_REMOTE = re.compile(r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)block/buzz(?:\.git)?/?$")
 
 
 @dataclass(frozen=True)
@@ -71,11 +73,68 @@ class ProcessInspection:
     available: bool; paths: tuple[Path, ...] = (); detail: str = ""
 
 
+@dataclass(frozen=True)
+class UpstreamDesktopRelease:
+    """An immutable, stable official desktop-release tag discovered remotely."""
+    tag: str; object_sha: str; version: tuple[int, int, int]
+
+
 def git(repo: Path, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", "-C", str(repo), *args], check=check, text=True, capture_output=True)
 
 
 def repo_root(path: Path) -> Path: return Path(git(path, ["rev-parse", "--show-toplevel"]).stdout.strip()).resolve()
+
+
+def parse_upstream_desktop_tags(raw: str) -> list[UpstreamDesktopRelease]:
+    """Parse only immutable stable ``desktop-vX.Y.Z`` refs from ``ls-remote``."""
+    releases = []
+    for line in raw.splitlines():
+        object_sha, separator, ref = line.partition("\t")
+        match = DESKTOP_RELEASE_TAG.fullmatch(ref.removeprefix("refs/tags/")) if separator else None
+        if SHA.fullmatch(object_sha) and match:
+            releases.append(
+                UpstreamDesktopRelease(
+                    tag=ref.removeprefix("refs/tags/"),
+                    object_sha=object_sha,
+                    version=tuple(int(match.group(key)) for key in ("major", "minor", "patch")),
+                )
+            )
+    return releases
+
+
+def select_upstream_desktop_release(raw: str, requested_tag: str | None = None) -> UpstreamDesktopRelease:
+    releases = parse_upstream_desktop_tags(raw)
+    if requested_tag:
+        if not DESKTOP_RELEASE_TAG.fullmatch(requested_tag):
+            raise ValueError("--tag must be an immutable stable official tag in the form desktop-vX.Y.Z")
+        matching = [release for release in releases if release.tag == requested_tag]
+        if len(matching) != 1:
+            raise ValueError(f"official upstream does not advertise requested desktop tag {requested_tag}")
+        return matching[0]
+    if not releases:
+        raise ValueError("official upstream does not advertise a stable desktop-vX.Y.Z tag")
+    return max(releases, key=lambda release: release.version)
+
+
+def official_upstream_url(repo: Path, remote: str) -> str:
+    result = git(repo, ["remote", "get-url", remote], check=False)
+    url = result.stdout.strip()
+    if result.returncode or not OFFICIAL_BUZZ_REMOTE.fullmatch(url):
+        raise ValueError(f"{remote!r} must point directly to the official block/buzz GitHub repository")
+    return url
+
+
+def discover_upstream_desktop_release(repo: Path, remote: str, requested_tag: str | None = None) -> UpstreamDesktopRelease:
+    official_upstream_url(repo, remote)
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", "--refs", remote, "desktop-v*"],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        raise ValueError(f"cannot inspect official upstream tags: {result.stderr.strip() or result.returncode}")
+    return select_upstream_desktop_release(result.stdout, requested_tag)
 
 
 def parse_worktree_porcelain(raw: str) -> list[dict[str, str | bool]]:
@@ -309,6 +368,55 @@ def exact_stage_errors(repo: Path, sha: str, worktrees: Sequence[Worktree], path
     return errors
 
 
+def current_worktree(repo: Path, worktrees: Sequence[Worktree]) -> Worktree | None:
+    current = repo.resolve()
+    return next((worktree for worktree in worktrees if worktree.path == current), None)
+
+
+def upstream_upgrade_errors(repo: Path, worktrees: Sequence[Worktree], paths: InstallPaths) -> list[str]:
+    """Preconditions for a source-only official-upstream integration.
+
+    This deliberately does not build, package, or install.  A newly pushed
+    merge must first receive hosted CI, then the existing exact-SHA ``stage``
+    gate is the only way to create a desktop candidate.
+    """
+    errors = ensure_disk_floor(repo)
+    worktree = current_worktree(repo, worktrees)
+    if worktree is None:
+        errors.append("the current checkout is not a registered worktree")
+        return errors
+    if worktree.primary:
+        errors.append("run an upstream upgrade from a clean auxiliary worktree, never the primary checkout")
+    if not worktree.clean:
+        errors.append("the source checkout is dirty")
+    if not worktree.branch:
+        errors.append("the source checkout is detached; use a pushed fork branch")
+    elif not worktree.upstream:
+        errors.append("the source branch has no upstream; push it before integrating upstream")
+    elif not worktree.upstream.startswith("origin/"):
+        errors.append(f"the source branch must track the fork origin, not {worktree.upstream}")
+    elif worktree.ahead or worktree.behind:
+        errors.append(f"the source branch is not synchronized with {worktree.upstream} (ahead {worktree.ahead}, behind {worktree.behind})")
+    if sum(not item.primary for item in worktrees) > MAX_AUXILIARY_WORKTREES:
+        errors.append("the registered worktree budget is breached")
+    if paths.candidate.exists() or paths.candidate.is_symlink():
+        errors.append(f"a desktop candidate is awaiting promotion or acceptance: {paths.candidate}")
+    if paths.journal.exists():
+        errors.append(f"a transaction recovery journal is pending: {paths.journal}")
+    if paths.lock.exists():
+        errors.append(f"another build, promotion, rollback, or cleanup owns {paths.lock}")
+    return errors
+
+
+def merge_preflight_errors(repo: Path, target: str) -> list[str]:
+    """Use Git's read-only merge-tree to refuse conflicts before mutation."""
+    result = git(repo, ["merge-tree", "--write-tree", "HEAD", target], check=False)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "merge-tree reported a conflict"
+        return [f"official upstream tag cannot merge cleanly: {detail}"]
+    return []
+
+
 def hosted_ci_green(repo: Path, sha: str) -> bool:
     remote = git(repo, ["remote", "get-url", "origin"], check=False).stdout.strip(); match = re.search(r"(?:github\.com[:/])([^/]+/[^/.]+)(?:\.git)?$", remote)
     if not match: return False
@@ -385,6 +493,57 @@ def command_status(args: argparse.Namespace) -> int:
 def command_cargo_target(_args: argparse.Namespace) -> int: print(default_cargo_target()); return 0
 def command_build(args: argparse.Namespace) -> int:
     root = repo_root(args.repo); os.environ["CARGO_TARGET_DIR"] = str(default_cargo_target()); print(f"buzzfork-dev: shared Cargo target {default_cargo_target()}"); return run_guarded(args.command, root)
+
+
+def command_upgrade(args: argparse.Namespace) -> int:
+    """Merge and push one official upstream desktop tag; never build or install."""
+    root, paths = repo_root(args.repo), install_paths()
+    worktrees = inspect_worktrees(root)
+    errors = upstream_upgrade_errors(root, worktrees, paths)
+    try:
+        release = discover_upstream_desktop_release(root, args.remote, args.tag)
+    except ValueError as error:
+        errors.append(str(error))
+        release = None
+    if errors:
+        return report_refusal(errors)
+    assert release
+    target = f"refs/tags/{release.tag}^{{commit}}"
+    if git(root, ["merge-base", "--is-ancestor", target, "HEAD"], check=False).returncode == 0:
+        print(f"buzzfork-dev: {release.tag} is already integrated at {git(root, ['rev-parse', 'HEAD']).stdout.strip()}; no source, build, or install action is needed")
+        return 0
+    errors = merge_preflight_errors(root, target)
+    if errors:
+        return report_refusal(errors)
+    worktree = current_worktree(root, worktrees)
+    assert worktree and worktree.branch
+    fetch = ["git", "-C", root, "fetch", "--no-tags", args.remote, f"refs/tags/{release.tag}:refs/tags/{release.tag}"]
+    merge = ["git", "-C", root, "merge", "--no-ff", "--signoff", "--no-edit", f"refs/tags/{release.tag}"]
+    push = ["git", "-C", root, "push", "origin", f"HEAD:refs/heads/{worktree.branch}"]
+    print(f"buzzfork-dev: official upstream release {release.tag} ({'.'.join(str(part) for part in release.version)}, remote tag object {release.object_sha})")
+    for command in (fetch, merge, push):
+        print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: {quote_command(command)}")
+    if not args.execute:
+        print("buzzfork-dev: after the pushed merge receives successful hosted CI, run stage with the printed exact HEAD SHA")
+        return 0
+    with build_lock(paths):
+        # Re-check all mutable local conditions after acquiring the shared lock.
+        errors = upstream_upgrade_errors(root, inspect_worktrees(root), paths)
+        if errors:
+            return report_refusal(errors)
+        subprocess.run([str(part) for part in fetch], check=True)
+        fetched_object = git(root, ["rev-parse", "--verify", f"refs/tags/{release.tag}"]).stdout.strip()
+        if fetched_object != release.object_sha:
+            return report_refusal([f"official tag {release.tag} changed during upgrade discovery; expected {release.object_sha}, got {fetched_object}"])
+        errors = merge_preflight_errors(root, target)
+        if errors:
+            return report_refusal(errors)
+        subprocess.run([str(part) for part in merge], check=True)
+        subprocess.run([str(part) for part in push], check=True)
+    head = git(root, ["rev-parse", "HEAD"]).stdout.strip()
+    print(f"buzzfork-dev: integrated and pushed {release.tag}; exact fork head: {head}")
+    print(f"buzzfork-dev: wait for hosted CI on {head}, then run: python3 scripts/buzzfork_dev.py stage {head} --execute")
+    return 0
 
 
 def command_create(args: argparse.Namespace) -> int:
@@ -502,6 +661,10 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="report worktrees, disk, and desktop slots"); status.set_defaults(handler=command_status)
     cargo = commands.add_parser("cargo-target", help="print the shared Cargo target"); cargo.set_defaults(handler=command_cargo_target)
     build = commands.add_parser("build", help="run a command with the disk guard and shared Cargo target"); build.add_argument("command", nargs=argparse.REMAINDER); build.set_defaults(handler=command_build)
+    upgrade = commands.add_parser("upgrade", help="integrate and push one official upstream desktop release tag; never build or install")
+    upgrade.add_argument("--tag", help="exact stable official tag (desktop-vX.Y.Z); default: latest")
+    upgrade.add_argument("--remote", default="upstream", help="official block/buzz remote name (default: upstream)")
+    destructive_mode(upgrade); upgrade.set_defaults(handler=command_upgrade)
     create = commands.add_parser("create", help="preflight and optionally create an auxiliary worktree"); create.add_argument("path", type=Path); create.add_argument("branch"); create.add_argument("--base", default="origin/main"); destructive_mode(create); create.set_defaults(handler=command_create)
     finish = commands.add_parser("finish", help="remove only a clean, pushed, inactive worktree"); finish.add_argument("worktree", type=Path); destructive_mode(finish); finish.set_defaults(handler=command_finish)
     stage = commands.add_parser("stage", help="validate and stage one exact-head candidate outside worktrees"); stage.add_argument("sha", help="full immutable 40-character commit SHA"); stage.add_argument("--bundle", type=Path, help="already-packaged Buzz.app"); destructive_mode(stage); stage.set_defaults(handler=command_stage)

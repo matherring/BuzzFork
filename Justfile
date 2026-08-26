@@ -309,6 +309,11 @@ desktop-release-build target="aarch64-apple-darwin":
 buzzfork-desktop-status:
     python3 scripts/buzzfork_dev.py status
 
+# Discover, then explicitly integrate and push one immutable official
+# desktop-vX.Y.Z tag. This is source-only; hosted CI must pass before staging.
+buzzfork-upgrade *ARGS:
+    python3 scripts/buzzfork_dev.py upgrade {{ARGS}}
+
 buzzfork-desktop-stage sha *ARGS:
     python3 scripts/buzzfork_dev.py stage {{sha}} {{ARGS}}
 

@@ -123,6 +123,24 @@ class PureChecksTest(unittest.TestCase):
             (Path("/private/tmp/removed/Buzz.app/Contents/MacOS/buzz-desktop (deleted)"),),
         )
 
+    def test_selects_latest_stable_official_desktop_tag(self) -> None:
+        raw = (
+            "a" * 40 + "\trefs/tags/desktop-v0.5.19\n"
+            + "b" * 40 + "\trefs/tags/desktop-v0.5.20-rc.1\n"
+            + "c" * 40 + "\trefs/tags/desktop-v0.5.20\n"
+            + "d" * 40 + "\trefs/tags/desktop-v0.6.0\n"
+            + "not-a-sha\trefs/tags/desktop-v9.9.9\n"
+        )
+        latest = buzzfork_dev.select_upstream_desktop_release(raw)
+        self.assertEqual(latest.tag, "desktop-v0.6.0")
+        self.assertEqual(latest.version, (0, 6, 0))
+        self.assertEqual(
+            buzzfork_dev.select_upstream_desktop_release(raw, "desktop-v0.5.20").object_sha,
+            "c" * 40,
+        )
+        with self.assertRaises(ValueError):
+            buzzfork_dev.select_upstream_desktop_release(raw, "main")
+
 
 class WorktreeIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -207,6 +225,37 @@ class WorktreeIntegrationTest(unittest.TestCase):
                         buzzfork_dev.EXIT_REFUSED,
                     )
         self.assertFalse(self.third.exists())
+
+    def test_upgrade_dry_run_never_fetches_merges_or_pushes(self) -> None:
+        worktree = buzzfork_dev.Worktree(
+            path=self.implementation.resolve(),
+            head="a" * 40,
+            branch="implementation",
+            primary=False,
+            clean=True,
+            upstream="origin/implementation",
+            ahead=0,
+            behind=0,
+        )
+        release = buzzfork_dev.UpstreamDesktopRelease(
+            tag="desktop-v0.5.20",
+            object_sha="b" * 40,
+            version=(0, 5, 20),
+        )
+        args = argparse.Namespace(repo=self.implementation, remote="upstream", tag=None, execute=False)
+        no_ancestor = subprocess.CompletedProcess(["git"], 1, "", "")
+        with mock.patch.object(buzzfork_dev, "repo_root", return_value=self.implementation.resolve()), mock.patch.object(
+            buzzfork_dev, "install_paths", return_value=buzzfork_dev.InstallPaths(self.repo / "live", self.repo / "previous", self.repo / "candidate", self.repo / "state")
+        ), mock.patch.object(buzzfork_dev, "inspect_worktrees", return_value=[worktree]), mock.patch.object(
+            buzzfork_dev, "upstream_upgrade_errors", return_value=[]
+        ), mock.patch.object(buzzfork_dev, "discover_upstream_desktop_release", return_value=release), mock.patch.object(
+            buzzfork_dev, "merge_preflight_errors", return_value=[]
+        ), mock.patch.object(buzzfork_dev, "git", return_value=no_ancestor), mock.patch.object(
+            buzzfork_dev.subprocess, "run"
+        ) as run, mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(buzzfork_dev.command_upgrade(args), 0)
+        run.assert_not_called()
+        self.assertIn("dry-run", output.getvalue())
 
     def test_finish_dry_run_then_execute_preserves_branch(self) -> None:
         args = argparse.Namespace(
