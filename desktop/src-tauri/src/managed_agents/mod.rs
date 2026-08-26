@@ -1,4 +1,5 @@
 pub(crate) mod access_policy;
+mod acp_command;
 mod agent_env;
 pub(crate) mod agent_events;
 pub(crate) mod agent_snapshot;
@@ -50,6 +51,7 @@ pub(crate) fn lock_path_mutex() -> std::sync::MutexGuard<'static, ()> {
     PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+pub(crate) use acp_command::resolve_acp_command;
 pub use backend::*;
 pub use discovery::*;
 pub use env_vars::*;

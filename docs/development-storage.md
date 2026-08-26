@@ -87,3 +87,57 @@ all remaining worktrees and current free disk space.
 
 Development cleanup must never stop, prune, or modify the production Buzz
 Docker containers or volumes.
+
+## Canonical desktop promotion and rollback
+
+The family-office fork has exactly one live desktop path:
+`/Applications/Buzz.app`. Managed agents must run only the sidecars bundled
+next to that installed app; never point an agent at a checkout, worktree,
+Cargo target, or a versioned application archive. The one retained rollback is
+`/Applications/Buzz.previous.app`. A single candidate lives outside worktrees
+under Buzz application support (the paths are configurable only for tests).
+
+Upstream updates are first integrated into BuzzFork, pushed, and validated on
+the fork. Do not launch a vanilla upstream build. This private workflow does
+not use Tauri updater infrastructure; updater endpoints remain empty and no
+updater credentials belong in this repository.
+
+Every mutation previews by default. Use the exact, pushed commit SHA after its
+hosted CI run has succeeded:
+
+```bash
+python3 scripts/buzzfork_dev.py status
+head="$(git rev-parse HEAD)"                       # full immutable SHA
+python3 scripts/buzzfork_dev.py stage "$head" --dry-run
+python3 scripts/buzzfork_dev.py stage "$head" --execute
+
+# Mat-approved maintenance window: quit Buzz and all bundled harnesses yourself.
+python3 scripts/buzzfork_dev.py promote --dry-run
+python3 scripts/buzzfork_dev.py promote --execute
+
+# Relaunch /Applications/Buzz.app manually, then prove its process and hashes.
+python3 scripts/buzzfork_dev.py verify
+python3 scripts/buzzfork_dev.py accept --dry-run
+python3 scripts/buzzfork_dev.py accept --execute
+```
+
+`stage` refuses moving refs, dirty or unpushed source, a second candidate, a
+worktree-budget breach, a held lifecycle lock, less than 50 GiB free, or a
+non-green hosted CI run for the exact SHA. It validates the signed Apple
+Silicon bundle, bundle id, required non-empty sidecars, and all recorded
+SHA-256 hashes before copying it to the candidate slot.
+
+Promotion and rollback never quit or kill Buzz. They refuse when process-path
+inspection finds a process using an install slot, or cannot reliably inspect
+it. A journal makes interrupted moves recoverable on the next lifecycle
+invocation. At any live gate, with Buzz stopped, the rollback path is:
+
+```bash
+python3 scripts/buzzfork_dev.py rollback --dry-run
+python3 scripts/buzzfork_dev.py rollback --execute
+# Relaunch /Applications/Buzz.app manually, then run verify.
+```
+
+`accept` removes the consumed candidate and exact temporary package output,
+but retains exactly one rollback. It does not use Finder, forced worktree
+removal, broad deletion, or Docker cleanup.

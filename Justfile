@@ -254,7 +254,9 @@ desktop-tauri-test-compiled-flags: _ensure-sidecar-stubs
       cargo test compiled_policy_matches_expected -- --ignored --nocapture
     echo "Both compiled states verified."
 
-# Build the full desktop Tauri app locally (unsigned, for testing)
+# Build one locally packaged fork candidate. Its real sidecars are copied into
+# the bundle before Tauri signs it; zero-byte placeholders are compile-time
+# scaffolding only and must never enter a staged candidate.
 # Sidecar binary list must stay in sync with _ensure-sidecar-stubs above.
 # pnpm install is unconditional here: release builds must start from a clean dep tree.
 desktop-release-build target="aarch64-apple-darwin":
@@ -270,8 +272,38 @@ desktop-release-build target="aarch64-apple-darwin":
     touch "desktop/src-tauri/binaries/buzz-dev-mcp-$TARGET"
     touch "desktop/src-tauri/binaries/git-credential-nostr-$TARGET"
     touch "desktop/src-tauri/binaries/buzz-$TARGET"
+    cargo build --release --target "$TARGET" -p buzz-acp -p buzz-agent -p buzz-backend-kubernetes -p buzz-dev-mcp -p buzz-cli -p git-credential-nostr
+    TARGET_DIR=$(cargo metadata --format-version 1 --no-deps | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).target_directory")
+    SIDECARS=(buzz-acp buzz-agent buzz-dev-mcp git-credential-nostr buzz)
+    if [[ "$TARGET" != *windows* ]]; then
+        SIDECARS+=(buzz-backend-kubernetes)
+    fi
+    for bin in "${SIDECARS[@]}"; do
+        cp "${TARGET_DIR}/${TARGET}/release/${bin}" "desktop/src-tauri/binaries/${bin}-${TARGET}"
+        chmod +x "desktop/src-tauri/binaries/${bin}-${TARGET}"
+    done
     pnpm install
     cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
+
+# Canonical private-fork desktop promotion lifecycle. Mutating commands are
+# dry-runs unless explicitly passed --execute; never use a vanilla upstream app.
+buzzfork-desktop-status:
+    python3 scripts/buzzfork_dev.py status
+
+buzzfork-desktop-stage sha *ARGS:
+    python3 scripts/buzzfork_dev.py stage {{sha}} {{ARGS}}
+
+buzzfork-desktop-promote *ARGS:
+    python3 scripts/buzzfork_dev.py promote {{ARGS}}
+
+buzzfork-desktop-verify:
+    python3 scripts/buzzfork_dev.py verify
+
+buzzfork-desktop-rollback *ARGS:
+    python3 scripts/buzzfork_dev.py rollback {{ARGS}}
+
+buzzfork-desktop-accept *ARGS:
+    python3 scripts/buzzfork_dev.py accept {{ARGS}}
 
 # Run desktop checks suitable for CI / pre-push
 desktop-ci: desktop-check desktop-test desktop-tauri-fmt-check desktop-build desktop-tauri-check desktop-tauri-test

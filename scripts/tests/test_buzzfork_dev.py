@@ -207,5 +207,101 @@ class WorktreeIntegrationTest(unittest.TestCase):
         self.assertEqual(git(self.repo, "rev-parse", "implementation"), git(self.repo, "rev-parse", "origin/implementation"))
 
 
+class DesktopLifecycleTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="buzzfork-desktop-test-")
+        root = Path(self.temp.name)
+        self.paths = buzzfork_dev.InstallPaths(
+            stable=root / "Applications/Buzz.app",
+            previous=root / "Applications/Buzz.previous.app",
+            candidate=root / "Support/Buzz.candidate.app",
+            state_dir=root / "Support/state",
+        )
+        self.paths.stable.parent.mkdir(parents=True)
+        self.paths.candidate.parent.mkdir(parents=True)
+        self.identity = buzzfork_dev.BundleIdentity(
+            bundle=str(self.paths.candidate),
+            version="0.5.19",
+            executable_hash="desktop-hash",
+            sidecar_hashes={name: f"{name}-hash" for name in buzzfork_dev.REQUIRED_SIDECARS},
+            bundle_id=buzzfork_dev.EXPECTED_BUNDLE_ID,
+        )
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    @staticmethod
+    def clear_processes(_path: Path) -> buzzfork_dev.ProcessInspection:
+        return buzzfork_dev.ProcessInspection(True)
+
+    def test_promotion_dry_run_changes_nothing(self) -> None:
+        self.paths.stable.mkdir()
+        self.paths.candidate.mkdir()
+        with mock.patch.object(buzzfork_dev, "install_paths", return_value=self.paths), mock.patch.object(
+            buzzfork_dev, "processes_using_path", self.clear_processes
+        ), mock.patch.object(buzzfork_dev, "validate_bundle", return_value=self.identity):
+            self.assertEqual(buzzfork_dev.command_promote(argparse.Namespace(execute=False)), 0)
+        self.assertTrue(self.paths.stable.exists())
+        self.assertTrue(self.paths.candidate.exists())
+        self.assertFalse(self.paths.previous.exists())
+        self.assertFalse(self.paths.manifest.exists())
+
+    def test_successful_promotion_and_rollback_keep_two_slots(self) -> None:
+        (self.paths.stable / "old").mkdir(parents=True)
+        (self.paths.candidate / "new").mkdir(parents=True)
+        with mock.patch.object(buzzfork_dev, "install_paths", return_value=self.paths), mock.patch.object(
+            buzzfork_dev, "processes_using_path", self.clear_processes
+        ), mock.patch.object(buzzfork_dev, "validate_bundle", return_value=self.identity):
+            self.assertEqual(buzzfork_dev.command_promote(argparse.Namespace(execute=True)), 0)
+            self.assertTrue((self.paths.stable / "new").exists())
+            self.assertTrue((self.paths.previous / "old").exists())
+            self.assertFalse(self.paths.candidate.exists())
+            self.assertEqual(buzzfork_dev.command_rollback(argparse.Namespace(execute=True)), 0)
+        self.assertTrue((self.paths.stable / "old").exists())
+        self.assertTrue((self.paths.previous / "new").exists())
+        self.assertFalse(self.paths.displaced.exists())
+
+    def test_promote_recovery_restores_runnable_stable_after_interruption(self) -> None:
+        (self.paths.previous / "old").mkdir(parents=True)
+        (self.paths.prestage / "new").mkdir(parents=True)
+        buzzfork_dev.write_journal(self.paths, "promote", "stable_saved", self.identity)
+        with mock.patch.object(buzzfork_dev, "processes_using_path", self.clear_processes):
+            buzzfork_dev.recover_transaction(self.paths)
+        self.assertTrue((self.paths.stable / "old").exists())
+        self.assertTrue((self.paths.candidate / "new").exists())
+        self.assertFalse(self.paths.journal.exists())
+
+    def test_lifecycle_lock_and_active_process_fail_closed(self) -> None:
+        self.paths.state_dir.mkdir(parents=True)
+        self.paths.lock.write_text("other\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            with buzzfork_dev.build_lock(self.paths):
+                pass
+        self.paths.lock.unlink()
+        worktree = buzzfork_dev.Worktree(
+            path=self.paths.candidate,
+            head="a" * 40,
+            branch="pushed",
+            primary=False,
+            clean=True,
+            upstream="origin/pushed",
+            ahead=0,
+            behind=0,
+        )
+        self.paths.candidate.mkdir()
+        errors = buzzfork_dev.finish_errors(
+            worktree,
+            inspector=lambda path: buzzfork_dev.ProcessInspection(True, (path / "Contents/MacOS/buzz-acp",)),
+        )
+        self.assertTrue(any("processes still use" in error for error in errors))
+
+    def test_cleanup_targets_never_include_production_docker(self) -> None:
+        targets = (self.paths.candidate, self.paths.prestage, self.paths.retired, self.paths.displaced)
+        for target in targets:
+            self.assertNotIn("docker", str(target).lower())
+            self.assertNotIn("buzz-postgres", str(target))
+            self.assertNotIn("buzz-redis", str(target))
+
+
 if __name__ == "__main__":
     unittest.main()

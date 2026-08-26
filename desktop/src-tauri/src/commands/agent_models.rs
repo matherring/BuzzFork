@@ -19,7 +19,7 @@ use crate::{
     managed_agents::{
         build_managed_agent_summary, current_instance_id, discovery_env_with_baked_floor,
         find_managed_agent_mut, known_acp_runtime, load_global_agent_config, load_managed_agents,
-        load_personas, managed_agent_avatar_url, missing_command_message, normalize_agent_args,
+        load_personas, managed_agent_avatar_url, normalize_agent_args, resolve_acp_command,
         resolve_command, save_managed_agents, sync_managed_agent_processes, try_regenerate_nest,
         AgentModelInfo, AgentModelsResponse, UpdateManagedAgentRequest, UpdateManagedAgentResponse,
         DEFAULT_ACP_COMMAND,
@@ -62,8 +62,7 @@ pub async fn get_agent_models(
             .find(|r| r.pubkey == pubkey)
             .ok_or_else(|| format!("agent {pubkey} not found"))?;
 
-        let resolved = resolve_command(&record.acp_command)
-            .ok_or_else(|| missing_command_message(&record.acp_command, "ACP harness command"))?;
+        let resolved = resolve_acp_command(&record.acp_command)?;
 
         // Resolve the effective harness from the linked persona (mirrors spawn),
         // so model discovery runs against the persona's current harness, not the
@@ -210,8 +209,7 @@ pub async fn discover_agent_models(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(DEFAULT_ACP_COMMAND);
-    let resolved_acp = resolve_command(acp_command)
-        .ok_or_else(|| missing_command_message(acp_command, "ACP harness command"))?;
+    let resolved_acp = resolve_acp_command(acp_command)?;
 
     let agent_command = input.agent_command.trim();
     if agent_command.is_empty() {

@@ -1099,22 +1099,18 @@ fn probe_auth_status(binary_path: &Path, probe_args: &[&str]) -> AuthStatus {
 }
 
 pub fn command_availability(command: &str) -> CommandAvailabilityInfo {
-    let resolved_path = resolve_command(command).map(|path| path.display().to_string());
+    let resolved_path = if command.trim() == crate::managed_agents::DEFAULT_ACP_COMMAND {
+        crate::managed_agents::resolve_acp_command(command)
+            .ok()
+            .map(|path| path.display().to_string())
+    } else {
+        resolve_command(command).map(|path| path.display().to_string())
+    };
     CommandAvailabilityInfo {
         command: command.to_string(),
         available: resolved_path.is_some(),
         resolved_path,
     }
-}
-
-pub fn missing_command_message(command: &str, role: &str) -> String {
-    if command_looks_like_path(command) {
-        return format!("{role} `{command}` does not exist.");
-    }
-
-    format!(
-        "{role} `{command}` was not found. Make sure it is installed and on your PATH. Antivirus software can quarantine bundled binaries — if that happened, restore the file or reinstall Buzz. (Source builds: see TESTING.md.)"
-    )
 }
 
 pub(crate) fn classify_runtime(

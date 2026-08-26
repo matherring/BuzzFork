@@ -11,7 +11,8 @@ use serde_json::Value;
 use serde::{Deserialize, Serialize};
 
 use crate::managed_agents::{
-    default_agent_workdir, known_acp_runtime_exact, normalize_agent_args, resolve_command,
+    default_agent_workdir, known_acp_runtime_exact, normalize_agent_args, resolve_acp_command,
+    resolve_command, DEFAULT_ACP_COMMAND,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,12 +120,7 @@ fn run_buzz_acp_auth_command<const N: usize>(
         .find_map(|command| resolve_command(command).map(|path| (*command, path)))
         .ok_or_else(|| format!("{} ACP adapter is not installed", runtime.label))?;
 
-    let acp_path = std::env::current_exe()
-        .map(|path| path.with_file_name(format!("buzz-acp{}", std::env::consts::EXE_SUFFIX)))
-        .ok()
-        .filter(|path| path.exists())
-        .or_else(|| resolve_command("buzz-acp"))
-        .ok_or_else(|| "buzz-acp helper not found".to_string())?;
+    let acp_path = resolve_acp_command(DEFAULT_ACP_COMMAND)?;
 
     let augmented_path = auth_command_path();
     run_buzz_acp_auth_command_with_paths(
