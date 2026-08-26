@@ -384,7 +384,7 @@ def command_stage(args: argparse.Namespace) -> int:
     root, paths = repo_root(args.repo), install_paths(); errors = exact_stage_errors(root, args.sha, inspect_worktrees(root), paths)
     if errors: return report_refusal(errors)
     if not hosted_ci_green(root, args.sha): return report_refusal(["hosted CI has not succeeded for this exact pushed SHA"])
-    source = args.bundle.expanduser().resolve() if args.bundle else root / "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Buzz.app"; print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: validate {source} and stage one candidate at {paths.candidate}")
+    source = args.bundle.expanduser().resolve() if args.bundle else default_cargo_target() / "aarch64-apple-darwin/release/bundle/macos/Buzz.app"; print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: validate {source} and stage one candidate at {paths.candidate}")
     if not args.execute: return 0
     with build_lock(paths):
         if not args.bundle:
