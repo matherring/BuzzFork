@@ -89,13 +89,17 @@ export function LocalFileCard({
   }, [openDefault, previewable, reference]);
 
   const menuItems = [
-    {
-      label: "Open in Buzz Preview",
-      onSelect: () => {
-        closeMenu();
-        openLocalDocument(reference);
-      },
-    },
+    ...(previewable
+      ? [
+          {
+            label: "Open in Buzz Preview",
+            onSelect: () => {
+              closeMenu();
+              openLocalDocument(reference);
+            },
+          },
+        ]
+      : []),
     {
       label: externalActionLabel,
       onSelect: () => {

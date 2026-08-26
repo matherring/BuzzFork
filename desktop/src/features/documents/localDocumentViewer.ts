@@ -166,13 +166,16 @@ function linkifyOutsideInlineCode(text: string): string {
   for (const match of text.matchAll(INLINE_CODE_PATTERN)) {
     const index = match.index ?? 0;
     output += linkifyPlainText(text.slice(cursor, index));
-    output += match[0];
+    const reference = localFileReferenceFromText(match[2]);
+    output += reference
+      ? `[${match[0]}](${localFileHref(reference)})`
+      : match[0];
     cursor = index + match[0].length;
   }
   return output + linkifyPlainText(text.slice(cursor));
 }
 
-/** Linkify bare absolute paths without rewriting fenced or inline code. */
+/** Linkify absolute local paths, including complete inline-code path literals. */
 export function linkifyLocalDocumentPaths(content: string): string {
   let output = "";
   let cursor = 0;

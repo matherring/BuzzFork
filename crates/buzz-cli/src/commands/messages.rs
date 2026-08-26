@@ -659,6 +659,46 @@ fn trim_path_token(token: &str) -> &str {
     trimmed.strip_suffix('.').unwrap_or(trimmed)
 }
 
+/// Extract literal candidates without breaking deliberately delimited paths at
+/// whitespace. Bare tokens retain the historical punctuation handling, while
+/// inline-code and quoted spans preserve their complete payload so a path such
+/// as `My Report.md` can be resolved as one file reference.
+fn relative_file_reference_candidates(content: &str) -> Vec<&str> {
+    let mut candidates = content
+        .split(path_token_is_delimiter)
+        .map(trim_path_token)
+        .collect::<Vec<_>>();
+    let mut cursor = 0;
+
+    while let Some(offset) = content[cursor..].find(['`', '"']) {
+        let start = cursor + offset;
+        let Some(delimiter) = content[start..].chars().next() else {
+            break;
+        };
+        let delimiter_len = if delimiter == '`' {
+            content[start..]
+                .chars()
+                .take_while(|character| *character == '`')
+                .map(char::len_utf8)
+                .sum()
+        } else {
+            delimiter.len_utf8()
+        };
+        let payload_start = start + delimiter_len;
+        let closing = &content[start..payload_start];
+
+        if let Some(end_offset) = content[payload_start..].find(closing) {
+            let payload_end = payload_start + end_offset;
+            candidates.push(trim_path_token(&content[payload_start..payload_end]));
+            cursor = payload_end + delimiter_len;
+        } else {
+            cursor = payload_start;
+        }
+    }
+
+    candidates
+}
+
 fn canonical_relative_regular_file(candidate: &str, working_directory: &Path) -> Option<PathBuf> {
     if candidate.is_empty()
         || candidate.starts_with('/')
@@ -705,8 +745,7 @@ fn enforce_relative_file_reference_preflight(
         return Ok(());
     }
     let attached = attached_regular_files(files, working_directory);
-    for raw_candidate in content.split(path_token_is_delimiter) {
-        let candidate = trim_path_token(raw_candidate);
+    for candidate in relative_file_reference_candidates(content) {
         let Some(canonical) = canonical_relative_regular_file(candidate, working_directory) else {
             continue;
         };
@@ -1572,6 +1611,21 @@ mod tests {
         assert!(error.contains("absolute path"));
         assert!(error.contains("--reference-only"));
         assert!(error.contains("never uploads"));
+    }
+
+    #[test]
+    fn space_containing_relative_file_references_require_an_attachment() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("README.md"), "# Read me").unwrap();
+        fs::write(temp.path().join("My Report.md"), "# Report").unwrap();
+
+        for content in ["See `My Report.md`.", "See \"My Report.md\"."] {
+            let error = enforce_relative_file_reference_preflight(content, &[], false, temp.path())
+                .unwrap_err()
+                .to_string();
+
+            assert!(error.contains("My Report.md"), "{content}: {error}");
+        }
     }
 
     #[test]
