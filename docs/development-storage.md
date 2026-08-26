@@ -109,7 +109,6 @@ the exact `--tag`), and refuses a non-official remote, a dirty or unpushed
 auxiliary worktree, a lifecycle lock, less than 50 GiB free, a pending
 candidate, or a merge conflict. With `--execute` it fetches that exact tag,
 merges it with a signed-off merge commit, and pushes the current fork branch.
-It never compiles, packages, changes an installed app, or opens a release.
 
 ```bash
 # Run from a clean auxiliary BuzzFork worktree, never the dirty primary checkout.
@@ -118,27 +117,24 @@ python3 scripts/buzzfork_dev.py upgrade --tag desktop-v0.5.20 --dry-run
 python3 scripts/buzzfork_dev.py upgrade --execute
 ```
 
-After GitHub Actions reports successful CI for the exact pushed merge head,
-copy that full SHA from the command output into the existing staged-build flow:
+For this toy/local workflow, the unattended command is the usual path. One
+explicit `--execute` stages the exact pushed SHA, gracefully quits the running
+canonical Buzz if needed, transactionally promotes it, launches only
+`/Applications/Buzz.app`, proves its process path and hashes, then removes the
+candidate and temporary package output while retaining one rollback:
 
 ```bash
-python3 scripts/buzzfork_dev.py status
-python3 scripts/buzzfork_dev.py stage <exact-40-character-pushed-SHA> --dry-run
-python3 scripts/buzzfork_dev.py stage <exact-40-character-pushed-SHA> --execute
+# The exact SHA printed by upgrade --execute; no hosted-CI wait is required.
+python3 scripts/buzzfork_dev.py deploy <exact-40-character-pushed-SHA> --dry-run
+python3 scripts/buzzfork_dev.py deploy <exact-40-character-pushed-SHA> --execute
 
-# Mat-approved maintenance window: quit Buzz and all bundled harnesses yourself.
-python3 scripts/buzzfork_dev.py promote --dry-run
-python3 scripts/buzzfork_dev.py promote --execute
-
-# Relaunch /Applications/Buzz.app manually, then prove its process and hashes.
-python3 scripts/buzzfork_dev.py verify
-python3 scripts/buzzfork_dev.py accept --dry-run
-python3 scripts/buzzfork_dev.py accept --execute
+# Or run source integration and the complete lifecycle together.
+python3 scripts/buzzfork_dev.py upgrade --deploy --execute
 ```
 
 `stage` refuses moving refs, dirty or unpushed source, a second candidate, a
-worktree-budget breach, a held lifecycle lock, less than 50 GiB free, or a
-non-green hosted CI run for the exact SHA. It validates the signed Apple
+worktree-budget breach, a held lifecycle lock, or less than 50 GiB free. It
+validates the signed Apple
 Silicon bundle, bundle id, required non-empty sidecars, and all recorded
 SHA-256 hashes before copying it to the candidate slot.
 
@@ -146,6 +142,10 @@ This is also the deterministic recompilation command: it runs the focused
 desktop format check and one guarded release package build using the shared
 Cargo target, then validates and copies exactly one candidate. Do not invoke
 an ad-hoc Tauri build for a fleet upgrade.
+
+Hosted CI remains available as an opt-in confidence check: add
+`--require-hosted-ci` to `stage`, `deploy`, or `upgrade --deploy`. It is not a
+required gate for this toy/local workflow.
 
 Promotion and rollback never quit or kill Buzz. They refuse when process-path
 inspection finds a process using an install slot, or cannot reliably inspect

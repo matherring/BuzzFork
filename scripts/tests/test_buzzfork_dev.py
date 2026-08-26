@@ -123,6 +123,20 @@ class PureChecksTest(unittest.TestCase):
             (Path("/private/tmp/removed/Buzz.app/Contents/MacOS/buzz-desktop (deleted)"),),
         )
 
+    def test_lsof_nonzero_with_a_full_path_is_still_a_process_match(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["lsof"],
+            1,
+            stdout="p123\nftxt\nn/Applications/Buzz.app/Contents/MacOS/buzz-desktop\n",
+            stderr="",
+        )
+        with mock.patch.object(buzzfork_dev.shutil, "which", return_value="/usr/sbin/lsof"), mock.patch.object(
+            buzzfork_dev.subprocess, "run", return_value=result
+        ):
+            inspection = buzzfork_dev.processes_using_path(Path("/Applications/Buzz.app"))
+        self.assertTrue(inspection.available)
+        self.assertEqual(inspection.paths, (Path("/Applications/Buzz.app/Contents/MacOS/buzz-desktop"),))
+
     def test_selects_latest_stable_official_desktop_tag(self) -> None:
         raw = (
             "a" * 40 + "\trefs/tags/desktop-v0.5.19\n"
@@ -317,6 +331,24 @@ class DesktopLifecycleTest(unittest.TestCase):
         self.assertTrue(self.paths.candidate.exists())
         self.assertFalse(self.paths.previous.exists())
         self.assertFalse(self.paths.manifest.exists())
+
+    def test_deploy_dry_run_never_quits_launches_or_promotes(self) -> None:
+        args = argparse.Namespace(
+            repo=Path("/repo"),
+            sha="a" * 40,
+            bundle=None,
+            execute=False,
+            require_hosted_ci=False,
+            quit_timeout=30,
+            launch_timeout=30,
+        )
+        with mock.patch.object(buzzfork_dev, "command_stage", return_value=0) as stage, mock.patch.object(
+            buzzfork_dev, "install_paths", return_value=self.paths
+        ), mock.patch.object(buzzfork_dev.subprocess, "run") as run, mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(buzzfork_dev.command_deploy(args), 0)
+        self.assertFalse(stage.call_args.args[0].execute)
+        run.assert_not_called()
+        self.assertIn("dry-run", output.getvalue())
 
     def test_successful_promotion_and_rollback_keep_two_slots(self) -> None:
         (self.paths.stable / "old").mkdir(parents=True)

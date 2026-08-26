@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterator, Sequence
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -213,13 +214,14 @@ def _lsof_paths(path: Path) -> ProcessInspection:
         result = subprocess.run(["lsof", "-nP", "-Fpcfn", "+D", str(path)], text=True, capture_output=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired) as error: return ProcessInspection(False, detail=f"lsof inspection failed: {error}")
     if result.returncode not in (0, 1): return ProcessInspection(False, detail=f"lsof inspection failed: {result.stderr.strip() or result.returncode}")
-    if result.returncode == 1: return ProcessInspection(True)
     seen = []
     for line in result.stdout.splitlines():
         if line.startswith("n") and len(line) > 1:
             value = Path(line[1:].removesuffix(" (deleted)"))
             if value not in seen: seen.append(value)
-    return ProcessInspection(True, tuple(seen)) if seen else ProcessInspection(False, detail="lsof returned no parseable full paths")
+    if seen: return ProcessInspection(True, tuple(seen))
+    if result.returncode == 1 and not result.stdout.strip(): return ProcessInspection(True)
+    return ProcessInspection(False, detail="lsof returned output without parseable full paths")
 
 
 def processes_using_path(path: Path) -> ProcessInspection: return _lsof_paths(path)
@@ -245,8 +247,6 @@ def running_buzz_bundle_processes() -> ProcessInspection:
         return ProcessInspection(False, detail=f"global lsof inspection failed: {error}")
     if result.returncode not in (0, 1):
         return ProcessInspection(False, detail=f"global lsof inspection failed: {result.stderr.strip() or result.returncode}")
-    if result.returncode == 1:
-        return ProcessInspection(True)
 
     matches: list[Path] = []
     for line in result.stdout.splitlines():
@@ -262,7 +262,10 @@ def running_buzz_bundle_processes() -> ProcessInspection:
             display = Path(raw_path)
             if display not in matches:
                 matches.append(display)
-    return ProcessInspection(True, tuple(matches))
+    if matches: return ProcessInspection(True, tuple(matches))
+    if result.returncode == 1 and not result.stdout.strip(): return ProcessInspection(True)
+    if result.returncode == 1: return ProcessInspection(False, detail="global lsof returned output without parseable full paths")
+    return ProcessInspection(True)
 
 
 def path_process_errors(paths: Sequence[Path], *, inspector=processes_using_path) -> list[str]:
@@ -331,9 +334,12 @@ def validate_bundle(bundle: Path, *, runner=command_output) -> BundleIdentity:
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True); owner = path.parent.stat()
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as stream:
         json.dump(value, stream, indent=2, sort_keys=True); stream.write("\n"); stream.flush(); os.fsync(stream.fileno()); temporary = Path(stream.name)
+    # An administrator may run the /Applications transaction, but the durable
+    # user state must remain accessible to the account that stages/verifies.
+    if os.geteuid() == 0: os.chown(temporary, owner.st_uid, owner.st_gid)
     os.replace(temporary, path); os.chmod(path, 0o600)
 
 
@@ -510,7 +516,10 @@ def command_upgrade(args: argparse.Namespace) -> int:
     assert release
     target = f"refs/tags/{release.tag}^{{commit}}"
     if git(root, ["merge-base", "--is-ancestor", target, "HEAD"], check=False).returncode == 0:
-        print(f"buzzfork-dev: {release.tag} is already integrated at {git(root, ['rev-parse', 'HEAD']).stdout.strip()}; no source, build, or install action is needed")
+        head = git(root, ["rev-parse", "HEAD"]).stdout.strip()
+        print(f"buzzfork-dev: {release.tag} is already integrated at {head}; no source integration is needed")
+        if getattr(args, "deploy", False):
+            return command_deploy(argparse.Namespace(repo=root, sha=head, bundle=getattr(args, "bundle", None), execute=args.execute, require_hosted_ci=getattr(args, "require_hosted_ci", False), quit_timeout=getattr(args, "quit_timeout", 30), launch_timeout=getattr(args, "launch_timeout", 30)))
         return 0
     errors = merge_preflight_errors(root, target)
     if errors:
@@ -524,7 +533,8 @@ def command_upgrade(args: argparse.Namespace) -> int:
     for command in (fetch, merge, push):
         print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: {quote_command(command)}")
     if not args.execute:
-        print("buzzfork-dev: after the pushed merge receives successful hosted CI, run stage with the printed exact HEAD SHA")
+        print("buzzfork-dev: execute mode will push the merge; use its printed exact HEAD SHA with stage, optionally adding --require-hosted-ci")
+        if getattr(args, "deploy", False): print("buzzfork-dev: execute mode will immediately run the exact-head stage, promote, launch, verify, and cleanup sequence")
         return 0
     with build_lock(paths):
         # Re-check all mutable local conditions after acquiring the shared lock.
@@ -542,7 +552,9 @@ def command_upgrade(args: argparse.Namespace) -> int:
         subprocess.run([str(part) for part in push], check=True)
     head = git(root, ["rev-parse", "HEAD"]).stdout.strip()
     print(f"buzzfork-dev: integrated and pushed {release.tag}; exact fork head: {head}")
-    print(f"buzzfork-dev: wait for hosted CI on {head}, then run: python3 scripts/buzzfork_dev.py stage {head} --execute")
+    if getattr(args, "deploy", False):
+        return command_deploy(argparse.Namespace(repo=root, sha=head, bundle=getattr(args, "bundle", None), execute=True, require_hosted_ci=getattr(args, "require_hosted_ci", False), quit_timeout=getattr(args, "quit_timeout", 30), launch_timeout=getattr(args, "launch_timeout", 30)))
+    print(f"buzzfork-dev: run: python3 scripts/buzzfork_dev.py stage {head} --execute (add --require-hosted-ci only when wanted)")
     return 0
 
 
@@ -567,7 +579,7 @@ def command_finish(args: argparse.Namespace) -> int:
 def command_stage(args: argparse.Namespace) -> int:
     root, paths = repo_root(args.repo), install_paths(); errors = exact_stage_errors(root, args.sha, inspect_worktrees(root), paths)
     if errors: return report_refusal(errors)
-    if not hosted_ci_green(root, args.sha): return report_refusal(["hosted CI has not succeeded for this exact pushed SHA"])
+    if getattr(args, "require_hosted_ci", False) and not hosted_ci_green(root, args.sha): return report_refusal(["hosted CI has not succeeded for this exact pushed SHA"])
     source = args.bundle.expanduser().resolve() if args.bundle else default_cargo_target() / "aarch64-apple-darwin/release/bundle/macos/Buzz.app"; print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: validate {source} and stage one candidate at {paths.candidate}")
     if not args.execute: return 0
     with build_lock(paths):
@@ -579,6 +591,77 @@ def command_stage(args: argparse.Namespace) -> int:
         if copied.executable_hash != identity.executable_hash or copied.sidecar_hashes != identity.sidecar_hashes: remove_exact_bundle(paths.candidate); return report_refusal(["candidate hashes differ from the validated package"])
         atomic_json(paths.state_dir / "candidate-state.json", {"fork_commit": args.sha, "identity": asdict(copied), "packaging_output": str(source)})
     return 0
+
+
+def quit_running_buzz(paths: InstallPaths, *, timeout_seconds: int = 30) -> list[str]:
+    """Gracefully stop the canonical desktop so an explicit deploy can proceed."""
+    slots = [paths.stable, paths.candidate, paths.previous, paths.prestage, paths.retired]
+    initial = stopped_buzz_errors(slots)
+    if not initial:
+        return []
+    result = subprocess.run(
+        ["osascript", "-e", 'tell application id "xyz.block.buzz.app" to quit'],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode and "isn't running" not in (result.stderr + result.stdout):
+        return [f"could not ask the canonical Buzz app to quit: {result.stderr.strip() or result.stdout.strip() or result.returncode}"]
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        errors = stopped_buzz_errors(slots)
+        if not errors:
+            return []
+        time.sleep(0.5)
+    return stopped_buzz_errors(slots) + [f"Buzz did not stop within {timeout_seconds} seconds"]
+
+
+def wait_for_stable_desktop(paths: InstallPaths, *, timeout_seconds: int) -> list[str]:
+    desktop = paths.stable / "Contents/MacOS" / DESKTOP_EXECUTABLE
+    deadline = time.monotonic() + timeout_seconds
+    last = ProcessInspection(False, detail="desktop did not start")
+    while time.monotonic() < deadline:
+        last = processes_using_path(paths.stable)
+        if last.available and desktop in last.paths:
+            return []
+        time.sleep(0.5)
+    if not last.available:
+        return [f"cannot prove launched executable path: {last.detail}"]
+    return [f"desktop did not start from {desktop} within {timeout_seconds} seconds"]
+
+
+def command_deploy(args: argparse.Namespace) -> int:
+    """One explicit unattended exact-SHA stage, promote, launch, verify, and cleanup."""
+    if args.quit_timeout <= 0 or args.launch_timeout <= 0:
+        return report_refusal(["deploy timeouts must be positive seconds"])
+    stage_args = argparse.Namespace(
+        repo=args.repo,
+        sha=args.sha,
+        bundle=args.bundle,
+        execute=args.execute,
+        require_hosted_ci=args.require_hosted_ci,
+    )
+    result = command_stage(stage_args)
+    if result:
+        return result
+    if not args.execute:
+        paths = install_paths()
+        print(f"buzzfork-dev: dry-run: gracefully quit {paths.stable} if running, promote one candidate, launch from the stable path, verify, and accept cleanup")
+        return 0
+    paths = install_paths()
+    errors = quit_running_buzz(paths, timeout_seconds=args.quit_timeout)
+    if errors:
+        return report_refusal(errors)
+    result = command_promote(argparse.Namespace(execute=True))
+    if result:
+        return result
+    subprocess.run(["open", str(paths.stable)], check=True)
+    errors = wait_for_stable_desktop(paths, timeout_seconds=args.launch_timeout)
+    if errors:
+        return report_refusal(errors)
+    result = command_verify(argparse.Namespace())
+    if result:
+        return result
+    return command_accept(argparse.Namespace(execute=True))
 
 
 def command_promote(args: argparse.Namespace) -> int:
@@ -661,13 +744,25 @@ def build_parser() -> argparse.ArgumentParser:
     status = commands.add_parser("status", help="report worktrees, disk, and desktop slots"); status.set_defaults(handler=command_status)
     cargo = commands.add_parser("cargo-target", help="print the shared Cargo target"); cargo.set_defaults(handler=command_cargo_target)
     build = commands.add_parser("build", help="run a command with the disk guard and shared Cargo target"); build.add_argument("command", nargs=argparse.REMAINDER); build.set_defaults(handler=command_build)
-    upgrade = commands.add_parser("upgrade", help="integrate and push one official upstream desktop release tag; never build or install")
+    upgrade = commands.add_parser("upgrade", help="integrate and push one official upstream desktop release tag; add --deploy for the full lifecycle")
     upgrade.add_argument("--tag", help="exact stable official tag (desktop-vX.Y.Z); default: latest")
     upgrade.add_argument("--remote", default="upstream", help="official block/buzz remote name (default: upstream)")
+    upgrade.add_argument("--deploy", action="store_true", help="after integration, run the exact-head unattended deploy sequence")
+    upgrade.add_argument("--bundle", type=Path, help="already-packaged Buzz.app for --deploy")
+    upgrade.add_argument("--require-hosted-ci", action="store_true", help="require successful hosted CI before --deploy")
+    upgrade.add_argument("--quit-timeout", type=int, default=30, help="seconds to wait for a graceful Buzz quit during --deploy")
+    upgrade.add_argument("--launch-timeout", type=int, default=30, help="seconds to wait for canonical Buzz launch during --deploy")
     destructive_mode(upgrade); upgrade.set_defaults(handler=command_upgrade)
     create = commands.add_parser("create", help="preflight and optionally create an auxiliary worktree"); create.add_argument("path", type=Path); create.add_argument("branch"); create.add_argument("--base", default="origin/main"); destructive_mode(create); create.set_defaults(handler=command_create)
     finish = commands.add_parser("finish", help="remove only a clean, pushed, inactive worktree"); finish.add_argument("worktree", type=Path); destructive_mode(finish); finish.set_defaults(handler=command_finish)
-    stage = commands.add_parser("stage", help="validate and stage one exact-head candidate outside worktrees"); stage.add_argument("sha", help="full immutable 40-character commit SHA"); stage.add_argument("--bundle", type=Path, help="already-packaged Buzz.app"); destructive_mode(stage); stage.set_defaults(handler=command_stage)
+    stage = commands.add_parser("stage", help="validate and stage one exact-head candidate outside worktrees"); stage.add_argument("sha", help="full immutable 40-character commit SHA"); stage.add_argument("--bundle", type=Path, help="already-packaged Buzz.app"); stage.add_argument("--require-hosted-ci", action="store_true", help="require successful hosted CI for this SHA (optional for toy/local use)"); destructive_mode(stage); stage.set_defaults(handler=command_stage)
+    deploy = commands.add_parser("deploy", help="one exact-SHA stage, promote, launch, verify, and cleanup run")
+    deploy.add_argument("sha", help="full immutable 40-character commit SHA")
+    deploy.add_argument("--bundle", type=Path, help="already-packaged Buzz.app")
+    deploy.add_argument("--require-hosted-ci", action="store_true", help="require successful hosted CI for this SHA")
+    deploy.add_argument("--quit-timeout", type=int, default=30, help="seconds to wait for a graceful Buzz quit (default: 30)")
+    deploy.add_argument("--launch-timeout", type=int, default=30, help="seconds to wait for canonical Buzz launch (default: 30)")
+    destructive_mode(deploy); deploy.set_defaults(handler=command_deploy)
     promote = commands.add_parser("promote", help="transactionally promote the staged candidate"); destructive_mode(promote); promote.set_defaults(handler=command_promote)
     verify = commands.add_parser("verify", help="prove the relaunched canonical app matches install state"); verify.set_defaults(handler=command_verify)
     rollback = commands.add_parser("rollback", help="transactionally restore the single rollback app"); destructive_mode(rollback); rollback.set_defaults(handler=command_rollback)

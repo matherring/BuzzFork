@@ -317,6 +317,10 @@ buzzfork-upgrade *ARGS:
 buzzfork-desktop-stage sha *ARGS:
     python3 scripts/buzzfork_dev.py stage {{sha}} {{ARGS}}
 
+# One exact-SHA stage, promote, canonical launch, live verification, and cleanup.
+buzzfork-desktop-deploy sha *ARGS:
+    python3 scripts/buzzfork_dev.py deploy {{sha}} {{ARGS}}
+
 buzzfork-desktop-promote *ARGS:
     python3 scripts/buzzfork_dev.py promote {{ARGS}}
 
