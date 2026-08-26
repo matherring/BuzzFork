@@ -67,6 +67,14 @@ export function canPreviewDocument(filename: string): boolean {
   return documentExtension(filename) !== null;
 }
 
+/** The native opener is the only safe handling for local HTML. */
+export function localFileExternalActionLabel(path: string): string {
+  const filename = path.split("/").at(-1) ?? path;
+  return filename.toLowerCase().endsWith(".html")
+    ? "Open externally"
+    : "Open with Default App";
+}
+
 export function openLocalDocument(reference: LocalFileReference | string) {
   currentRequest = {
     kind: "local",

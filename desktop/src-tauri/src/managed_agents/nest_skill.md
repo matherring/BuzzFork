@@ -4,7 +4,7 @@ description: >
   Buzz CLI for relay operations: owner-reviewed agent drafts, messaging,
   channels, DMs, users, workflows, feed, reactions, canvas, social, repos,
   uploads, and agent memory.
-version: 1
+version: 2
 ---
 
 # Buzz CLI Skill
@@ -18,6 +18,15 @@ version: 1
 `BUZZ_AUTH_TAG` is required for `buzz agents draft-create` and `buzz agents draft-update` because those commands send owner-reviewed Desktop drafts. If missing, explain that this managed agent cannot open owner-reviewed agent drafts from chat.
 
 Run the bundled CLI with `--help` and `<command> <subcommand> --help` to discover all flags, arguments, and usage. This skill documents only what `--help` cannot tell you.
+
+## Sharing links and files
+
+- For a web resource, send a normal HTTPS Markdown link.
+- For a Buzz repository, PR, issue, project, or message, send the exact returned `buzz://` deep link.
+- For a portable local artifact, use `buzz messages send --file <absolute-path>` and confirm the accepted event includes its attachment metadata.
+- For a same-Mac local document, send its complete absolute path only when local-only access is intentional. Never present a bare relative path as if another recipient can open it.
+- If an existing relative path is deliberately a code or repository reference, pass `buzz messages send --reference-only` explicitly. The CLI never uploads a mentioned file automatically.
+- Do not evade blocked active-content types such as HTML by renaming them. HTML remains a local file that Buzz can offer to **Open externally**, not a relay attachment.
 
 ## Conversational Agent Management
 

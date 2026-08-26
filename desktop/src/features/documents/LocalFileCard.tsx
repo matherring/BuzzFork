@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import {
   canPreviewDocument,
+  localFileExternalActionLabel,
   openLocalDocument,
   type LocalFileReference,
 } from "@/features/documents/localDocumentViewer";
@@ -46,6 +47,7 @@ export function LocalFileCard({
 
   const filename = filenameFromPath(reference.path);
   const previewable = canPreviewDocument(reference.path);
+  const externalActionLabel = localFileExternalActionLabel(reference.path);
 
   const openDefault = React.useCallback(() => {
     void invokeTauri("open_local_document", {
@@ -95,7 +97,7 @@ export function LocalFileCard({
       },
     },
     {
-      label: "Open with Default App",
+      label: externalActionLabel,
       onSelect: () => {
         closeMenu();
         openDefault();
@@ -141,7 +143,9 @@ export function LocalFileCard({
           title={
             previewable
               ? `Open ${filename} in the Buzz preview`
-              : `Open ${filename} with its default app`
+              : externalActionLabel === "Open externally"
+                ? `Open ${filename} externally`
+                : `Open ${filename} with its default app`
           }
           type="button"
         >

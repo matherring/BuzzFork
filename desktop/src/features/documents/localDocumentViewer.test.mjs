@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canPreviewDocument,
   linkifyLocalDocumentPaths,
+  localFileExternalActionLabel,
   localFileReferenceFromHref,
   localFileReferenceFromText,
   localDocumentPathFromHref,
@@ -100,4 +101,15 @@ test("linkifies unsupported absolute paths as Finder-only local files", () => {
     "Keep /Users/adminmat/.buzz/REPOS/app/main.ts as ordinary text.",
   );
   assert.match(output, /buzz-local-file:/);
+});
+
+test("keeps local HTML external and labels that action explicitly", () => {
+  const path = "/Users/adminmat/.buzz/REPOS/fleet/LIVE_FLEET.html";
+  assert.equal(canPreviewDocument(path), false);
+  assert.equal(localFileExternalActionLabel(path), "Open externally");
+  assert.equal(
+    localFileExternalActionLabel("/tmp/meeting-notes.md"),
+    "Open with Default App",
+  );
+  assert.match(linkifyLocalDocumentPaths(`Open ${path}.`), /buzz-local-file:/);
 });
