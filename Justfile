@@ -283,7 +283,16 @@ desktop-release-build target="aarch64-apple-darwin":
         chmod +x "desktop/src-tauri/binaries/${bin}-${TARGET}"
     done
     pnpm install
-    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}}
+    cd {{desktop_dir}} && pnpm tauri build --features mesh-llm --target {{target}} --bundles app
+    BUNDLE="${TARGET_DIR}/${TARGET}/release/bundle/macos/Buzz.app"
+    # Tauri may leave an ad-hoc desktop executable without a sealed app-resource
+    # envelope when no Developer ID identity is configured. Sign the completed
+    # bundle once, after every sidecar/resource has been copied, then never
+    # mutate it again before validation/staging.
+    if ! codesign --verify --deep --strict "$BUNDLE"; then
+        codesign --force --deep --sign - "$BUNDLE"
+    fi
+    codesign --verify --deep --strict "$BUNDLE"
 
 # Canonical private-fork desktop promotion lifecycle. Mutating commands are
 # dry-runs unless explicitly passed --execute; never use a vanilla upstream app.
