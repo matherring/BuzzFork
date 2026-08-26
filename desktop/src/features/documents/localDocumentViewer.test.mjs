@@ -36,13 +36,13 @@ test("recognizes the supported preview document families", () => {
 test("linkifies bare paths but leaves fenced and non-path inline code unchanged", () => {
   const path = "/Users/adminmat/.buzz/RESEARCH/REPORT.md";
   const output = linkifyLocalDocumentPaths(
-    `Open ${path}. Inline \`const path = \"${path}\"\`.\n\n\`\`\`text\n${path}\n\`\`\``,
+    `Open ${path}. Inline \`const path = "${path}"\`.\n\n\`\`\`text\n${path}\n\`\`\``,
   );
   assert.match(
     output,
     /\[\/Users\/adminmat\/\.buzz\/RESEARCH\/REPORT\.md\]\(buzz-local-file:/,
   );
-  assert.ok(output.includes(`Inline \`const path = \"${path}\"\``));
+  assert.ok(output.includes(`Inline \`const path = "${path}"\``));
   assert.ok(output.includes(`text\n${path}\n`));
 });
 
@@ -124,5 +124,8 @@ test("keeps local HTML external and labels that action explicitly", () => {
     localFileExternalActionLabel("/tmp/meeting-notes.md"),
     "Open with Default App",
   );
-  assert.match(linkifyLocalDocumentPaths(`Open \`${path}\`.`), /buzz-local-file:/);
+  assert.match(
+    linkifyLocalDocumentPaths(`Open \`${path}\`.`),
+    /buzz-local-file:/,
+  );
 });
