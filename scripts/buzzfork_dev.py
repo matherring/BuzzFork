@@ -24,6 +24,8 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Iterator, Sequence
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from buzzfork_build_guard import MIN_FREE_BYTES, format_gib, free_bytes, run_guarded
 
@@ -311,10 +313,16 @@ def hosted_ci_green(repo: Path, sha: str) -> bool:
     remote = git(repo, ["remote", "get-url", "origin"], check=False).stdout.strip(); match = re.search(r"(?:github\.com[:/])([^/]+/[^/.]+)(?:\.git)?$", remote)
     if not match: return False
     result = subprocess.run(["gh", "run", "list", "--repo", match.group(1), "--workflow", "ci.yml", "--commit", sha, "--limit", "20", "--json", "conclusion,headSha"], text=True, capture_output=True)
-    if result.returncode: return False
-    try: runs = json.loads(result.stdout)
-    except json.JSONDecodeError: return False
-    return any(run.get("headSha") == sha and run.get("conclusion") == "success" for run in runs if isinstance(run, dict))
+    if not result.returncode:
+        try: runs = json.loads(result.stdout)
+        except json.JSONDecodeError: runs = []
+        if any(run.get("headSha") == sha and run.get("conclusion") == "success" for run in runs if isinstance(run, dict)): return True
+    try:
+        with urlopen(f"https://api.github.com/repos/{match.group(1)}/actions/runs?head_sha={sha}&per_page=100", timeout=20) as response:
+            payload = json.load(response)
+    except (OSError, URLError, json.JSONDecodeError): return False
+    runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
+    return any(run.get("name") == "CI" and run.get("head_sha") == sha and run.get("conclusion") == "success" for run in runs if isinstance(run, dict))
 
 
 def copy_candidate(source: Path, candidate: Path) -> None:
