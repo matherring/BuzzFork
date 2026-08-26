@@ -296,6 +296,20 @@ class DesktopLifecycleTest(unittest.TestCase):
         self.assertTrue((self.paths.candidate / "new").exists())
         self.assertFalse(self.paths.journal.exists())
 
+    def test_recovery_discards_superseded_rollback_after_promoted_step(self) -> None:
+        (self.paths.stable / "new").mkdir(parents=True)
+        (self.paths.previous / "old-live").mkdir(parents=True)
+        (self.paths.retired / "older-rollback").mkdir(parents=True)
+        buzzfork_dev.write_journal(self.paths, "promote", "promoted", self.identity)
+        with mock.patch.object(buzzfork_dev, "processes_using_path", self.clear_processes), mock.patch.object(
+            buzzfork_dev, "validate_bundle", return_value=self.identity
+        ):
+            buzzfork_dev.recover_transaction(self.paths)
+        self.assertTrue((self.paths.stable / "new").exists())
+        self.assertTrue((self.paths.previous / "old-live").exists())
+        self.assertFalse(self.paths.retired.exists())
+        self.assertFalse(self.paths.journal.exists())
+
     def test_lifecycle_lock_and_active_process_fail_closed(self) -> None:
         self.paths.state_dir.mkdir(parents=True)
         self.paths.lock.write_text("other\n", encoding="utf-8")

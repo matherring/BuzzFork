@@ -330,22 +330,26 @@ def write_install_manifest(paths: InstallPaths, identity: BundleIdentity, *, for
 def recover_transaction(paths: InstallPaths, *, inspector=processes_using_path) -> None:
     journal = read_json(paths.journal)
     if not journal: return
-    errors = path_process_errors([paths.stable, paths.previous, paths.candidate, paths.prestage, paths.displaced], inspector=inspector)
+    errors = path_process_errors([paths.stable, paths.previous, paths.candidate, paths.prestage, paths.retired, paths.displaced], inspector=inspector)
     if errors: raise ValueError("cannot recover while processes use an install slot: " + "; ".join(errors))
     action, step = journal.get("action"), journal.get("step")
     if action == "promote":
-        if step in ("prepared", "candidate_prestaged"):
+        if step in ("prepared", "previous_retired", "candidate_prestaged"):
             if paths.prestage.exists() and not paths.candidate.exists(): atomic_move(paths.prestage, paths.candidate)
+            if paths.retired.exists() and not paths.previous.exists(): atomic_move(paths.retired, paths.previous)
         elif step == "stable_saved":
             if not paths.stable.exists() and paths.previous.exists(): atomic_move(paths.previous, paths.stable)
             if paths.prestage.exists() and not paths.candidate.exists(): atomic_move(paths.prestage, paths.candidate)
+            if paths.retired.exists() and not paths.previous.exists(): atomic_move(paths.retired, paths.previous)
         elif step == "promoted":
             if not paths.stable.exists(): raise ValueError("promotion recovery cannot find a runnable stable slot")
+            if paths.retired.exists(): remove_exact_bundle(paths.retired, inspector=inspector)
             write_install_manifest(paths, validate_bundle(paths.stable))
         else: raise ValueError(f"unknown promotion recovery step: {step}")
     elif action == "rollback":
-        if step == "stable_displaced":
+        if step in ("prepared", "stable_displaced"):
             if not paths.stable.exists() and paths.displaced.exists(): atomic_move(paths.displaced, paths.stable)
+            elif paths.stable.exists() and paths.displaced.exists() and not paths.previous.exists(): atomic_move(paths.displaced, paths.previous)
         elif step == "rolled_back":
             if not paths.stable.exists(): raise ValueError("rollback recovery cannot find a runnable stable slot")
             if paths.displaced.exists() and not paths.previous.exists(): atomic_move(paths.displaced, paths.previous)
@@ -414,10 +418,14 @@ def command_promote(args: argparse.Namespace) -> int:
         if not paths.stable.exists(): return report_refusal([f"live stable app is missing: {paths.stable}"])
         if paths.prestage.exists() or paths.retired.exists(): return report_refusal(["a stale promotion staging slot exists; recover it before promotion"])
         write_journal(paths, "promote", "prepared", identity)
-        if paths.previous.exists(): atomic_move(paths.previous, paths.retired)
+        if paths.previous.exists():
+            atomic_move(paths.previous, paths.retired)
+            write_journal(paths, "promote", "previous_retired", identity)
+            maybe_interrupt("previous_retired")
         atomic_move(paths.candidate, paths.prestage); write_journal(paths, "promote", "candidate_prestaged", identity); maybe_interrupt("candidate_prestaged")
         atomic_move(paths.stable, paths.previous); write_journal(paths, "promote", "stable_saved", identity); maybe_interrupt("stable_saved")
         atomic_move(paths.prestage, paths.stable); write_journal(paths, "promote", "promoted", identity); maybe_interrupt("promoted")
+        if paths.retired.exists(): remove_exact_bundle(paths.retired)
         write_install_manifest(paths, identity, fork_sha=(read_json(paths.state_dir / "candidate-state.json") or {}).get("fork_commit")); paths.journal.unlink(missing_ok=True)
     return 0
 
