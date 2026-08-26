@@ -214,6 +214,17 @@ def path_process_errors(paths: Sequence[Path], *, inspector=processes_using_path
     return errors
 
 
+def stopped_buzz_errors(paths: Sequence[Path]) -> list[str]:
+    """Refuse a slot transaction unless every desktop/harness process is stopped."""
+    errors = path_process_errors(paths)
+    active_bundles = running_buzz_bundle_processes()
+    if not active_bundles.available:
+        errors.append(f"cannot safely inspect all running Buzz bundles: {active_bundles.detail}")
+    elif active_bundles.paths:
+        errors.append("Buzz desktop or a bundled harness is still running: " + ", ".join(str(path) for path in active_bundles.paths))
+    return errors
+
+
 def finish_errors(worktree: Worktree | None, *, inspector=processes_using_path) -> list[str]:
     if worktree is None: return ["the requested path is not a registered worktree"]
     errors = []
@@ -404,16 +415,14 @@ def command_stage(args: argparse.Namespace) -> int:
 def command_promote(args: argparse.Namespace) -> int:
     paths = install_paths()
     if not paths.candidate.exists(): return report_refusal([f"no candidate exists at {paths.candidate}"])
-    errors = path_process_errors([paths.stable, paths.candidate, paths.previous, paths.prestage, paths.retired])
-    active_bundles = running_buzz_bundle_processes()
-    if not active_bundles.available:
-        errors.append(f"cannot safely inspect all running Buzz bundles: {active_bundles.detail}")
-    elif active_bundles.paths:
-        errors.append("Buzz desktop or a bundled harness is still running: " + ", ".join(str(path) for path in active_bundles.paths))
+    promotion_slots = [paths.stable, paths.candidate, paths.previous, paths.prestage, paths.retired]
+    errors = stopped_buzz_errors(promotion_slots)
     if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
     identity = validate_bundle(paths.candidate); print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: promote {paths.candidate} to {paths.stable}, retaining one rollback at {paths.previous}")
     if not args.execute: return 0
     with build_lock(paths):
+        errors = stopped_buzz_errors(promotion_slots)
+        if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
         recover_transaction(paths)
         if not paths.stable.exists(): return report_refusal([f"live stable app is missing: {paths.stable}"])
         if paths.prestage.exists() or paths.retired.exists(): return report_refusal(["a stale promotion staging slot exists; recover it before promotion"])
@@ -448,11 +457,14 @@ def command_verify(args: argparse.Namespace) -> int:
 def command_rollback(args: argparse.Namespace) -> int:
     paths = install_paths()
     if not paths.stable.exists() or not paths.previous.exists(): return report_refusal(["rollback requires both the live and previous app slots"])
-    errors = path_process_errors([paths.stable, paths.previous, paths.displaced])
+    rollback_slots = [paths.stable, paths.previous, paths.displaced]
+    errors = stopped_buzz_errors(rollback_slots)
     if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
     identity = validate_bundle(paths.previous); print(f"buzzfork-dev: {'execute' if args.execute else 'dry-run'}: restore {paths.previous} to {paths.stable}")
     if not args.execute: return 0
     with build_lock(paths):
+        errors = stopped_buzz_errors(rollback_slots)
+        if errors: return report_refusal(errors + ["quit Buzz and every bundled harness yourself; this command never stops them automatically"])
         recover_transaction(paths); write_journal(paths, "rollback", "prepared", identity); atomic_move(paths.stable, paths.displaced); write_journal(paths, "rollback", "stable_displaced", identity); maybe_interrupt("stable_displaced")
         atomic_move(paths.previous, paths.stable); atomic_move(paths.displaced, paths.previous); write_journal(paths, "rollback", "rolled_back", identity); maybe_interrupt("rolled_back")
         write_install_manifest(paths, identity); paths.journal.unlink(missing_ok=True)
