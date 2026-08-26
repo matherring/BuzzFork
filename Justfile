@@ -83,6 +83,18 @@ logs *ARGS:
 
 # ─── Build & Check ───────────────────────────────────────────────────────────
 
+# Report worktree/upstream state, shared Cargo target, and current free disk.
+buzzfork-status:
+    python3 scripts/buzzfork_dev.py status
+
+# Run the deterministic disk/worktree lifecycle tests.
+buzzfork-dev-test:
+    python3 -m unittest scripts/tests/test_buzzfork_dev.py
+
+# Run a focused local Cargo command behind the disk guard and shared target.
+local-cargo *ARGS:
+    python3 scripts/buzzfork_dev.py build -- cargo {{ARGS}}
+
 # Build the Rust workspace
 build:
     cargo build --workspace
