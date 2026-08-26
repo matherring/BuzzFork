@@ -247,6 +247,23 @@ test("explains that local DOCX preview is not available yet", async ({
   );
 });
 
+test("keeps local HTML external-only", async ({ page }) => {
+  const path = "/private/tmp/fleet/LIVE_FLEET.html";
+  await emitMessage(page, {
+    channelName: "general",
+    content: `Open ${path}.`,
+  });
+
+  const card = localFileCard(page, "LIVE_FLEET.html");
+  await card.getByTestId("local-file-card-menu").click();
+  await expect(
+    page.getByRole("button", { name: "Open externally" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open in Buzz Preview" }),
+  ).toHaveCount(0);
+});
+
 test("renders a local-file card without reading the path", async ({ page }) => {
   const path = "/Users/adminmat/.codex/private/archive.zip";
   await emitMessage(page, {

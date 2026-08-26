@@ -1,6 +1,10 @@
 use buzz_sdk::{DeleteMessageOptions, DiffMeta, ThreadRef, VoteDirection};
 use nostr::PublicKey;
-use std::path::Path;
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
 
 use crate::client::{
@@ -571,6 +575,7 @@ pub struct SendMessageParams {
     pub reply_to: Option<String>,
     pub broadcast: bool,
     pub files: Vec<String>,
+    pub reference_only: bool,
     pub mentions: Vec<String>,
 }
 
@@ -608,6 +613,151 @@ struct RenderedUpload {
     imeta: Vec<String>,
 }
 
+fn path_token_is_delimiter(character: char) -> bool {
+    character.is_whitespace()
+        || matches!(
+            character,
+            '`' | '"'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+        )
+}
+
+fn trim_path_token(token: &str) -> &str {
+    let trimmed = token.trim_matches(|character| {
+        matches!(
+            character,
+            '`' | '"'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+        )
+    });
+    trimmed.strip_suffix('.').unwrap_or(trimmed)
+}
+
+/// Extract literal candidates without breaking deliberately delimited paths at
+/// whitespace. Bare tokens retain the historical punctuation handling, while
+/// inline-code and quoted spans preserve their complete payload so a path such
+/// as `My Report.md` can be resolved as one file reference.
+fn relative_file_reference_candidates(content: &str) -> Vec<&str> {
+    let mut candidates = content
+        .split(path_token_is_delimiter)
+        .map(trim_path_token)
+        .collect::<Vec<_>>();
+    let mut cursor = 0;
+
+    while let Some(offset) = content[cursor..].find(['`', '"']) {
+        let start = cursor + offset;
+        let Some(delimiter) = content[start..].chars().next() else {
+            break;
+        };
+        let delimiter_len = if delimiter == '`' {
+            content[start..]
+                .chars()
+                .take_while(|character| *character == '`')
+                .map(char::len_utf8)
+                .sum()
+        } else {
+            delimiter.len_utf8()
+        };
+        let payload_start = start + delimiter_len;
+        let closing = &content[start..payload_start];
+
+        if let Some(end_offset) = content[payload_start..].find(closing) {
+            let payload_end = payload_start + end_offset;
+            candidates.push(trim_path_token(&content[payload_start..payload_end]));
+            cursor = payload_end + delimiter_len;
+        } else {
+            cursor = payload_start;
+        }
+    }
+
+    candidates
+}
+
+fn canonical_relative_regular_file(candidate: &str, working_directory: &Path) -> Option<PathBuf> {
+    if candidate.is_empty()
+        || candidate.starts_with('/')
+        || candidate.starts_with('~')
+        || candidate.contains("://")
+    {
+        return None;
+    }
+    let canonical = fs::canonicalize(working_directory.join(candidate)).ok()?;
+    canonical.is_file().then_some(canonical)
+}
+
+fn attached_regular_files(files: &[String], working_directory: &Path) -> HashSet<PathBuf> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let path = Path::new(file);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                working_directory.join(path)
+            };
+            fs::canonicalize(resolved)
+                .ok()
+                .filter(|canonical| canonical.is_file())
+        })
+        .collect()
+}
+
+/// Stop an accidental share before any relay request is made.
+///
+/// The guard intentionally reads file metadata only. A relative path is
+/// ambiguous: it may be a repository reference or it may be the local artifact
+/// that the author meant to attach. Requiring `--file` or `--reference-only`
+/// makes that choice explicit without ever uploading a file on the caller's
+/// behalf.
+fn enforce_relative_file_reference_preflight(
+    content: &str,
+    files: &[String],
+    reference_only: bool,
+    working_directory: &Path,
+) -> Result<(), CliError> {
+    if reference_only {
+        return Ok(());
+    }
+    let attached = attached_regular_files(files, working_directory);
+    for candidate in relative_file_reference_candidates(content) {
+        let Some(canonical) = canonical_relative_regular_file(candidate, working_directory) else {
+            continue;
+        };
+        if !attached.contains(&canonical) {
+            return Err(CliError::Usage(format!(
+                "message references existing relative file path `{candidate}` without attaching it. Choose one: attach it with `--file <absolute-path>`; use an absolute path only when same-Mac access is intentional; or pass `--reference-only` for a deliberate repository/code reference. The CLI never uploads a mentioned file automatically."
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Emit an attachment in the same shape Desktop consumes: media uses existing
 /// image/video syntax, while documents are ordinary filename-bearing links.
 fn render_uploaded_file(descriptor: &BlobDescriptor, filename: &str) -> RenderedUpload {
@@ -634,6 +784,14 @@ pub async fn cmd_send_message(
     // bugs for agent and human users alike.
     p.content = read_or_stdin(&p.content)?;
     validate_content_size(&p.content)?;
+    let working_directory = std::env::current_dir()
+        .map_err(|error| CliError::Other(format!("determine working directory: {error}")))?;
+    enforce_relative_file_reference_preflight(
+        &p.content,
+        &p.files,
+        p.reference_only,
+        &working_directory,
+    )?;
     if let Some(ref r) = p.reply_to {
         validate_hex64(r)?;
     }
@@ -928,6 +1086,7 @@ pub async fn dispatch(
             reply_to,
             broadcast,
             files,
+            reference_only,
             mentions,
         } => {
             cmd_send_message(
@@ -939,6 +1098,7 @@ pub async fn dispatch(
                     reply_to,
                     broadcast,
                     files,
+                    reference_only,
                     mentions,
                 },
             )
@@ -1042,8 +1202,9 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        event_mention_pubkeys, find_root_from_tags, match_profiles_by_name, merge_message_mentions,
-        missing_members, normalize_explicit_mentions, parse_member_pubkeys, render_uploaded_file,
+        enforce_relative_file_reference_preflight, event_mention_pubkeys, find_root_from_tags,
+        match_profiles_by_name, merge_message_mentions, missing_members,
+        normalize_explicit_mentions, parse_member_pubkeys, render_uploaded_file,
         resolve_names_to_pubkeys, sanitized_attachment_filename,
     };
     use crate::client::BlobDescriptor;
@@ -1051,6 +1212,7 @@ mod tests {
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
     };
     use serde_json::json;
+    use std::fs;
 
     const ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -1427,6 +1589,83 @@ mod tests {
                 "filename meeting-notes.md",
             ]
         );
+    }
+
+    #[test]
+    fn existing_relative_file_reference_requires_an_attachment() {
+        let temp = tempfile::tempdir().unwrap();
+        let fleet = temp.path().join("fleet");
+        fs::create_dir(&fleet).unwrap();
+        fs::write(fleet.join("LIVE_FLEET.html"), "<!doctype html>").unwrap();
+
+        let error = enforce_relative_file_reference_preflight(
+            "The durable page is `fleet/LIVE_FLEET.html`.",
+            &[],
+            false,
+            temp.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("--file <absolute-path>"));
+        assert!(error.contains("absolute path"));
+        assert!(error.contains("--reference-only"));
+        assert!(error.contains("never uploads"));
+    }
+
+    #[test]
+    fn space_containing_relative_file_references_require_an_attachment() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("README.md"), "# Read me").unwrap();
+        fs::write(temp.path().join("My Report.md"), "# Report").unwrap();
+
+        for content in ["See `My Report.md`.", "See \"My Report.md\"."] {
+            let error = enforce_relative_file_reference_preflight(content, &[], false, temp.path())
+                .unwrap_err()
+                .to_string();
+
+            assert!(error.contains("My Report.md"), "{content}: {error}");
+        }
+    }
+
+    #[test]
+    fn attached_relative_file_reference_is_allowed() {
+        let temp = tempfile::tempdir().unwrap();
+        let fleet = temp.path().join("fleet");
+        fs::create_dir(&fleet).unwrap();
+        let overview = fleet.join("LIVE_FLEET.html");
+        fs::write(&overview, "<!doctype html>").unwrap();
+
+        enforce_relative_file_reference_preflight(
+            "The durable page is `fleet/LIVE_FLEET.html`.",
+            &[overview.display().to_string()],
+            false,
+            temp.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn nonexistent_absolute_and_reference_only_paths_are_allowed() {
+        let temp = tempfile::tempdir().unwrap();
+        let fleet = temp.path().join("fleet");
+        fs::create_dir(&fleet).unwrap();
+        fs::write(fleet.join("LIVE_FLEET.html"), "<!doctype html>").unwrap();
+
+        enforce_relative_file_reference_preflight(
+            "Discuss `fleet/MISSING.html` and /Users/example/LIVE_FLEET.html.",
+            &[],
+            false,
+            temp.path(),
+        )
+        .unwrap();
+        enforce_relative_file_reference_preflight(
+            "Deliberate source reference: `fleet/LIVE_FLEET.html`.",
+            &[],
+            true,
+            temp.path(),
+        )
+        .unwrap();
     }
 
     // ---- match_profiles_by_name (author resolution for `messages search --author`) ----
