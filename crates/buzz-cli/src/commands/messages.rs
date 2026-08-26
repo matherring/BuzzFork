@@ -1,6 +1,6 @@
 use buzz_sdk::{DeleteMessageOptions, DiffMeta, ThreadRef, VoteDirection};
 use nostr::PublicKey;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::client::{
@@ -606,9 +606,64 @@ pub struct SendMessageParams {
     pub content: String,
     pub kind: Option<u16>,
     pub reply_to: Option<String>,
+    /// An auditable escape hatch for an agent turn with an inherited thread.
+    /// Never inferred from prose or `--broadcast`.
+    pub channel_root: bool,
     pub broadcast: bool,
     pub files: Vec<String>,
     pub mentions: Vec<String>,
+}
+
+const REPLY_CONTEXT_PATH_ENV: &str = "BUZZ_REPLY_CONTEXT_PATH";
+
+#[derive(serde::Deserialize)]
+struct ReplyContext {
+    channel_id: String,
+    reply_to: Option<String>,
+}
+
+/// Apply Buzz ACP's active-turn reply context at the final message-send
+/// boundary. A caller can deliberately opt out with `--channel-root`; without
+/// that explicit flag, an omitted `--reply-to` inherits the current anchor.
+///
+/// The context file is scoped to one ACP worker and is rewritten before every
+/// prompt. A malformed or missing file fails closed: silently publishing a
+/// channel-root message would lose the conversation's thread.
+fn resolve_send_reply_to(
+    channel_id: &str,
+    explicit_reply_to: Option<String>,
+    channel_root: bool,
+    context_path: Option<&Path>,
+) -> Result<Option<String>, CliError> {
+    if channel_root || explicit_reply_to.is_some() {
+        return Ok(explicit_reply_to);
+    }
+    let Some(path) = context_path else {
+        return Ok(None);
+    };
+    let contents = std::fs::read_to_string(path).map_err(|error| {
+        CliError::Other(format!(
+            "active reply context is unavailable at {}: {error}",
+            path.display()
+        ))
+    })?;
+    let context: ReplyContext = serde_json::from_str(&contents).map_err(|error| {
+        CliError::Other(format!(
+            "active reply context is invalid at {}: {error}",
+            path.display()
+        ))
+    })?;
+    if context.channel_id != channel_id {
+        return Err(CliError::Other(format!(
+            "active reply context is for channel {}, not {channel_id}",
+            context.channel_id
+        )));
+    }
+    Ok(context.reply_to)
+}
+
+fn active_reply_context_path() -> Option<PathBuf> {
+    std::env::var_os(REPLY_CONTEXT_PATH_ENV).map(PathBuf::from)
 }
 
 /// Convert a local path to the display-only `imeta filename` value.
@@ -671,6 +726,12 @@ pub async fn cmd_send_message(
     // bugs for agent and human users alike.
     p.content = read_or_stdin(&p.content)?;
     validate_content_size(&p.content)?;
+    p.reply_to = resolve_send_reply_to(
+        &p.channel_id,
+        p.reply_to,
+        p.channel_root,
+        active_reply_context_path().as_deref(),
+    )?;
     if let Some(ref r) = p.reply_to {
         validate_hex64(r)?;
     }
@@ -1001,6 +1062,7 @@ pub async fn dispatch(
             content,
             kind,
             reply_to,
+            channel_root,
             broadcast,
             files,
             mentions,
@@ -1012,6 +1074,7 @@ pub async fn dispatch(
                     content,
                     kind,
                     reply_to,
+                    channel_root,
                     broadcast,
                     files,
                     mentions,
@@ -1166,9 +1229,10 @@ mod tests {
     use super::{
         channel_id_from_event, cmd_get_thread, event_mention_pubkeys, find_root_from_tags,
         match_profiles_by_name, merge_message_mentions, missing_members,
-        normalize_explicit_mentions, parse_member_pubkeys, render_uploaded_file,
-        resolve_names_to_pubkeys, resolve_thread_target, sanitized_attachment_filename,
-        thread_ref_from_event, thread_ref_from_parent_tags, BuzzClient, CliError, Uuid,
+        normalize_explicit_mentions, parse_event_id, parse_member_pubkeys, render_uploaded_file,
+        resolve_names_to_pubkeys, resolve_send_reply_to, resolve_thread_target,
+        sanitized_attachment_filename, thread_ref_from_event, thread_ref_from_parent_tags,
+        BuzzClient, CliError, Uuid,
     };
     use crate::client::BlobDescriptor;
     use buzz_sdk::mentions::{
@@ -1176,6 +1240,7 @@ mod tests {
     };
     use nostr::Keys;
     use serde_json::json;
+    use uuid::Uuid;
 
     const ID_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const ID_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -1298,6 +1363,81 @@ mod tests {
 
         assert_eq!(thread_ref.parent_event_id, parent);
         assert_eq!(thread_ref.root_event_id, parent);
+    }
+
+    #[test]
+    fn active_thread_context_defaults_an_omitted_reply_to_and_builds_nip10_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reply-context.json");
+        let channel = Uuid::new_v4();
+        let root = "11".repeat(32);
+        std::fs::write(
+            &path,
+            json!({ "channel_id": channel.to_string(), "reply_to": root }).to_string(),
+        )
+        .unwrap();
+
+        let reply_to = resolve_send_reply_to(&channel.to_string(), None, false, Some(&path))
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply_to, root);
+
+        let event_id = parse_event_id(&reply_to).unwrap();
+        let thread = buzz_sdk::ThreadRef {
+            root_event_id: event_id,
+            parent_event_id: event_id,
+        };
+        let event = buzz_sdk::build_message(channel, "reply", Some(&thread), &[], false, &[])
+            .unwrap()
+            .sign_with_keys(&nostr::Keys::generate())
+            .unwrap();
+        let reply_tags: Vec<Vec<String>> = event
+            .tags
+            .iter()
+            .filter(|tag| tag.as_slice().first().is_some_and(|value| value == "e"))
+            .map(|tag| tag.as_slice().iter().map(ToString::to_string).collect())
+            .collect();
+        // ACP intentionally flattens human-facing replies at layer 1: when
+        // the active anchor is the root, NIP-10 represents that as one reply
+        // tag (the parent is itself the root), matching existing CLI behavior.
+        assert_eq!(
+            reply_tags,
+            vec![vec!["e".into(), root, "".into(), "reply".into()]]
+        );
+    }
+
+    #[test]
+    fn channel_root_escape_bypasses_active_thread_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reply-context.json");
+        let channel = Uuid::new_v4();
+        std::fs::write(
+            &path,
+            json!({ "channel_id": channel.to_string(), "reply_to": "22".repeat(32) }).to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_send_reply_to(&channel.to_string(), None, true, Some(&path)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn channel_root_turn_with_null_context_remains_top_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reply-context.json");
+        let channel = Uuid::new_v4();
+        std::fs::write(
+            &path,
+            json!({ "channel_id": channel.to_string(), "reply_to": null }).to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_send_reply_to(&channel.to_string(), None, false, Some(&path)).unwrap(),
+            None
+        );
     }
 
     #[test]

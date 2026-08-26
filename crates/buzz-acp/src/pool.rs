@@ -21,6 +21,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1046,6 +1047,7 @@ async fn create_session_and_apply_model(
         channel.id,
         channel.channel_type,
         ctx.session_title.as_deref(),
+        agent.index,
     );
 
     let resp = agent
@@ -1275,6 +1277,7 @@ fn mcp_servers_with_git_origin(
     channel_id: Option<Uuid>,
     channel_type: Option<&str>,
     agent_name: Option<&str>,
+    agent_index: usize,
 ) -> Vec<McpServer> {
     let mut servers = servers.to_vec();
     let origin = match (channel_id, channel_type) {
@@ -1290,9 +1293,20 @@ fn mcp_servers_with_git_origin(
             }),
         (None, _) => None,
     };
+    let reply_context = EnvVar {
+        name: "BUZZ_REPLY_CONTEXT_PATH".into(),
+        value: reply_context_path(agent_index)
+            .to_string_lossy()
+            .into_owned(),
+    };
     if let Some(origin) = origin {
         for server in &mut servers {
             server.env.push(origin.clone());
+            server.env.push(reply_context.clone());
+        }
+    } else {
+        for server in &mut servers {
+            server.env.push(reply_context.clone());
         }
     }
     servers
@@ -1312,6 +1326,35 @@ enum ModelSwitchOutcome {
     /// unrecognised model). The session is still on its default model;
     /// pre-switch capabilities must be preserved.
     Rejected,
+}
+
+fn reply_context_path(agent_index: usize) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "buzz-acp-reply-context-{}-{agent_index}.json",
+        std::process::id()
+    ))
+}
+
+#[derive(serde::Serialize)]
+struct ActiveReplyContext<'a> {
+    channel_id: String,
+    reply_to: Option<&'a str>,
+}
+
+/// Rewrite the worker-local context read by `buzz messages send`. This happens
+/// immediately before each prompt so a long-lived ACP session cannot retain a
+/// stale thread anchor from an earlier turn.
+fn write_active_reply_context(
+    agent_index: usize,
+    channel_id: Uuid,
+    reply_to: Option<&str>,
+) -> Result<(), AcpError> {
+    let path = reply_context_path(agent_index);
+    let body = serde_json::to_vec(&ActiveReplyContext {
+        channel_id: channel_id.to_string(),
+        reply_to,
+    })?;
+    std::fs::write(&path, body).map_err(AcpError::Io)
 }
 
 /// Send the appropriate ACP model-switch request with a timeout.
@@ -2350,6 +2393,30 @@ pub async fn run_prompt_task(
 
         let profile_lookup =
             fetch_prompt_profile_lookup(b, conversation_context.as_ref(), &ctx.rest_client).await;
+
+        // Enforce the same anchor rendered in the prompt at the final
+        // `buzz messages send` boundary. Writing a null anchor is intentional:
+        // it replaces any prior threaded turn's context for ordinary root turns.
+        let reply_anchor =
+            crate::queue::reply_anchor_for_batch(b, channel_info.as_ref(), profile_lookup.as_ref());
+        if let Err(error) =
+            write_active_reply_context(agent.index, b.channel_id, reply_anchor.as_deref())
+        {
+            tracing::error!(
+                target: "pool::reply_context",
+                channel = %b.channel_id,
+                "failed to write active reply context: {error}"
+            );
+            send_prompt_result(
+                &result_tx,
+                &turn_id,
+                agent,
+                source,
+                PromptOutcome::Error(error),
+                requeue_batch_if_queue(&ctx, batch),
+            );
+            return;
+        }
 
         let known_names: Vec<&str> = profile_lookup
             .iter()
@@ -4872,6 +4939,7 @@ mod tests {
             Some(channel_id),
             Some("stream"),
             None,
+            7,
         );
         assert!(servers[0].env.iter().any(|entry| {
             entry.name == "BUZZ_GIT_ORIGIN_CHANNEL_ID" && entry.value == channel_id.to_string()
@@ -4880,6 +4948,10 @@ mod tests {
             .env
             .iter()
             .any(|entry| entry.name == "BUZZ_GIT_ORIGIN_AGENT_NAME"));
+        assert!(servers[0]
+            .env
+            .iter()
+            .any(|entry| entry.name == "BUZZ_REPLY_CONTEXT_PATH"));
     }
 
     #[test]
@@ -4889,6 +4961,7 @@ mod tests {
             Some(Uuid::new_v4()),
             Some("dm"),
             Some("Builder"),
+            7,
         );
         assert!(servers[0].env.iter().any(|entry| {
             entry.name == "BUZZ_GIT_ORIGIN_AGENT_NAME" && entry.value == "Builder"

@@ -151,6 +151,23 @@ fn no_local_match_inserts_inbound_reusing_d_tag_as_id() {
     assert_eq!(personas.len(), 2, "re-receive of inserted record no-ops");
 }
 
+#[test]
+fn historical_retired_catalog_events_are_retained_but_never_materialized() {
+    // These are the coordinates found in stale Dev profiles. They may still
+    // arrive in the owner-history backfill, but cannot recreate startable
+    // definitions or their all-retired Back Office team.
+    assert!(!should_materialize_inbound(
+        30175,
+        "3a0db0dd-82d3-48db-8ea1-66bc9ebcaef7"
+    ));
+    assert!(!should_materialize_inbound(
+        30176,
+        "b6f01a26-a8a3-4367-a7b4-95e0571d8f39"
+    ));
+    assert!(should_materialize_inbound(30175, "current-persona"));
+    assert!(should_materialize_inbound(30176, "current-team"));
+}
+
 // ── Managed-agent (30177) inbound ────────────────────────────────────────
 
 const AGENT_PUBKEY: &str = "agentpubkeyhex0000000000000000000000000000000000000000000000000000";

@@ -1,15 +1,20 @@
 /**
  * Resolve the avatar for a running agent card.
  *
- * The card opens the concrete agent pubkey's profile, so that profile's kind:0
- * picture is authoritative. The linked definition remains a fallback while the
- * profile is missing or has no picture.
+ * Persisted agent and definition avatars are intentional custom metadata. A
+ * runtime/provider kind:0 picture is a truthful fallback only when neither is
+ * available; it commonly contains a generic provider logo.
  */
 export function resolveAgentCardAvatarUrl(
-  profileAvatarUrl: string | null | undefined,
+  agentAvatarUrl: string | null | undefined,
   personaAvatarUrl: string | null | undefined,
+  profileAvatarUrl: string | null | undefined,
 ): string | null {
-  for (const candidate of [profileAvatarUrl, personaAvatarUrl]) {
+  for (const candidate of [
+    agentAvatarUrl,
+    personaAvatarUrl,
+    profileAvatarUrl,
+  ]) {
     const trimmed = candidate?.trim();
     if (trimmed) return trimmed;
   }
@@ -17,13 +22,13 @@ export function resolveAgentCardAvatarUrl(
 }
 
 /**
- * A linked agent's profile is authoritative even when the definition already
- * supplies a fallback. Avatar-dependent actions must wait for that profile
- * query so they cannot snapshot the fallback before the profile resolves.
+ * Profile-dependent actions only wait when persisted custom metadata is not
+ * available, preventing a generic provider image from briefly replacing it.
  */
 export function isAgentCardAvatarLoading(
   hasLinkedAgent: boolean,
   isProfilePending: boolean,
+  hasPersistedAvatar: boolean,
 ): boolean {
-  return hasLinkedAgent && isProfilePending;
+  return hasLinkedAgent && isProfilePending && !hasPersistedAvatar;
 }

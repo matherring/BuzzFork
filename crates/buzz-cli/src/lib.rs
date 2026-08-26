@@ -401,8 +401,11 @@ pub enum MessagesCmd {
         #[arg(long)]
         kind: Option<u16>,
         /// Event ID to reply to (creates a thread)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "channel_root")]
         reply_to: Option<String>,
+        /// Intentionally post at the channel root instead of inheriting this turn's reply context
+        #[arg(long, default_value_t = false, conflicts_with = "reply_to")]
+        channel_root: bool,
         /// Also publish to the Nostr network
         #[arg(long, default_value_t = false)]
         broadcast: bool,
