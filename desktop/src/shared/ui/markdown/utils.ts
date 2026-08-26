@@ -1,6 +1,7 @@
 import * as React from "react";
 import { defaultUrlTransform } from "react-markdown";
 
+import { isChannelLink } from "@/features/messages/lib/channelLink";
 import { isMessageLink } from "@/features/messages/lib/messageLink";
 import { parseEntityLink } from "@/shared/lib/entityLink";
 
@@ -184,11 +185,11 @@ export function buzzDeepLinkUrlTransform(value: string, key: string): string {
   if (key !== "href") return defaultUrlTransform(value);
   if (
     value.startsWith("buzz-local-document:") ||
-    value.startsWith("buzz-local-file:")
-  ) {
+    value.startsWith("buzz-local-file:") ||
+    isMessageLink(value) ||
+    isChannelLink(value)
+  )
     return value;
-  }
-  if (isMessageLink(value)) return value;
   if (parseEntityLink(value).ok) return value;
   return defaultUrlTransform(value);
 }
