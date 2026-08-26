@@ -22,6 +22,7 @@ use tauri::Manager;
 use crate::util::replace_with_symlink;
 
 const CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.buzz.app.dev";
+const RELEASE_IDENTIFIER: &str = "xyz.block.buzz.app";
 const LEGACY_CANONICAL_DEV_IDENTIFIER: &str = "xyz.block.sprout.app.dev";
 const LEGACY_RELEASE_IDENTIFIER: &str = "xyz.block.sprout.app";
 
@@ -156,6 +157,9 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
 
     migrate_legacy_app_data_dir(app);
     sync_shared_agent_data(app);
+    if is_dev {
+        migrate_custom_agent_avatars_from_release(app);
+    }
     // Dev-build-only: copy any agent keys that exist in the production
     // keyring ("buzz-desktop") into the dev service ("buzz-desktop-dev")
     // so existing agents don't lose their keys after the service-name split.
@@ -173,6 +177,9 @@ fn run_boot_migrations_inner(app: &tauri::AppHandle, reset_completed: bool) {
     // Post-fold runtime reads fall back to unified-store definitions.
     fold_personas_into_agent_store(app);
     pollen::migrate_pollen_agent_name(app);
+    if is_dev {
+        purge_retired_dev_catalog(app);
+    }
     // Clean the legacy baked team-instructions suffix out of stored prompts
     // AFTER the fold (so definitions lifted out of personas.json are cleaned in
     // the same boot) and BEFORE backfill_standalone_agents (so a manufactured
@@ -221,6 +228,123 @@ pub fn migrate_legacy_app_data_dir(app: &tauri::AppHandle) {
             current_dir.display()
         ),
     }
+}
+
+/// Carry custom agent avatar metadata into a dev app-data identity without
+/// sharing the release identity, keychain entries, or complete agent records.
+///
+/// Worktree/dev builds deliberately have distinct application identifiers. A
+/// generic provider logo in their freshly-created agent record must not hide a
+/// custom avatar already chosen for the same agent in the release app. This
+/// migration copies only a non-default `avatar_url`, matched by public agent
+/// pubkey, and only when the dev record still has no custom avatar of its own.
+fn migrate_custom_agent_avatars_from_release(app: &tauri::AppHandle) {
+    let Ok(current_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let Some(parent) = current_dir.parent() else {
+        return;
+    };
+    let release_store = parent.join(RELEASE_IDENTIFIER).join("agents/managed-agents.json");
+    let dev_store = current_dir.join("agents/managed-agents.json");
+    migrate_custom_agent_avatars_in_file(&release_store, &dev_store, &crate::util::now_iso());
+}
+
+/// Remove known retired catalog records from a dev profile before the frontend
+/// can restore them as startable cards. The release profile is deliberately
+/// neither a source nor a target of this cleanup.
+fn purge_retired_dev_catalog(app: &tauri::AppHandle) {
+    let Ok(base_dir) = crate::managed_agents::managed_agents_base_dir(app) else {
+        return;
+    };
+    match purge_retired_catalog_in_dir(&base_dir) {
+        Ok(true) => eprintln!("buzz-desktop: retired-catalog: removed stale dev definitions"),
+        Ok(false) => {}
+        Err(error) => eprintln!("buzz-desktop: retired-catalog: {error}"),
+    }
+}
+
+fn migrate_custom_agent_avatars_in_file(release_store: &Path, dev_store: &Path, now: &str) {
+    if !release_store.exists() || !dev_store.exists() {
+        return;
+    }
+    let Ok(release_contents) = std::fs::read_to_string(release_store) else {
+        return;
+    };
+    let Ok(dev_contents) = std::fs::read_to_string(dev_store) else {
+        return;
+    };
+    let Ok(release_records) = serde_json::from_str::<Vec<serde_json::Value>>(&release_contents)
+    else {
+        eprintln!(
+            "buzz-desktop: avatar-migration: invalid release agent store {}",
+            release_store.display()
+        );
+        return;
+    };
+    let Ok(mut dev_records) = serde_json::from_str::<Vec<serde_json::Value>>(&dev_contents) else {
+        eprintln!(
+            "buzz-desktop: avatar-migration: invalid dev agent store {}",
+            dev_store.display()
+        );
+        return;
+    };
+
+    let release_avatars: std::collections::HashMap<String, String> = release_records
+        .iter()
+        .filter_map(|record| {
+            let pubkey = record.get("pubkey")?.as_str()?.trim();
+            let avatar = custom_agent_avatar_url(record)?;
+            (!pubkey.is_empty()).then(|| (pubkey.to_ascii_lowercase(), avatar))
+        })
+        .collect();
+    if release_avatars.is_empty() {
+        return;
+    }
+
+    let mut changed = false;
+    for record in &mut dev_records {
+        let Some(pubkey) = record.get("pubkey").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if custom_agent_avatar_url(record).is_some() {
+            continue;
+        }
+        let Some(avatar) = release_avatars.get(&pubkey.trim().to_ascii_lowercase()) else {
+            continue;
+        };
+        let Some(object) = record.as_object_mut() else {
+            continue;
+        };
+        object.insert("avatar_url".into(), serde_json::Value::String(avatar.clone()));
+        object.insert("updated_at".into(), serde_json::Value::String(now.to_string()));
+        changed = true;
+    }
+
+    if changed {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&dev_records) {
+            if let Err(error) = crate::managed_agents::atomic_write_json_restricted(dev_store, &bytes)
+            {
+                eprintln!(
+                    "buzz-desktop: avatar-migration: failed to write {}: {error}",
+                    dev_store.display()
+                );
+            }
+        }
+    }
+}
+
+/// Return an avatar only when it is not the runtime's bundled fallback.
+fn custom_agent_avatar_url(record: &serde_json::Value) -> Option<String> {
+    let avatar = record.get("avatar_url")?.as_str()?.trim();
+    if avatar.is_empty() {
+        return None;
+    }
+    let fallback = record
+        .get("agent_command")
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::managed_agents::managed_agent_avatar_url);
+    (fallback.as_deref() != Some(avatar)).then(|| avatar.to_string())
 }
 
 /// Knowledge directories and files carried from the legacy nest into the live
@@ -1373,9 +1497,12 @@ use fold::load_persona_runtimes;
 mod backfill;
 pub use backfill::backfill_standalone_agents;
 mod detach;
+pub use detach::detach_directory_backed_teams;
 mod pollen;
 mod team_membership;
 pub(crate) use pollen::*;
+pub(crate) mod retired_catalog;
+use retired_catalog::purge_retired_catalog_in_dir;
 mod team_suffix;
 pub use team_suffix::strip_baked_team_instructions;
 

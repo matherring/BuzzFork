@@ -262,7 +262,11 @@ function AgentPersonaCard({
   const isActive = agent ? isManagedAgentActive(agent) : false;
   const profileQuery = useUserProfileQuery(agent?.pubkey);
   const avatarUrl = agent
-    ? resolveAgentCardAvatarUrl(profileQuery.data?.avatarUrl, persona.avatarUrl)
+    ? resolveAgentCardAvatarUrl(
+        agent.avatarUrl,
+        persona.avatarUrl,
+        profileQuery.data?.avatarUrl,
+      )
     : persona.avatarUrl;
   const friendlyError = agent
     ? friendlyAgentLastError(agent.lastError, agent.lastErrorCode)?.copy
@@ -272,7 +276,11 @@ function AgentPersonaCard({
     <AgentIdentityCard
       actions={actions?.(
         avatarUrl,
-        isAgentCardAvatarLoading(Boolean(agent), profileQuery.isPending),
+        isAgentCardAvatarLoading(
+          Boolean(agent),
+          profileQuery.isPending,
+          Boolean(agent?.avatarUrl?.trim() || persona.avatarUrl?.trim()),
+        ),
       )}
       ariaLabel={`${title} agent profile`}
       avatar={
@@ -365,6 +373,11 @@ function StandaloneAgentCard({
   )?.copy;
   const isActive = isManagedAgentActive(agent);
   const opensRuntimeTab = Boolean(friendlyError && !isActive);
+  const avatarUrl = resolveAgentCardAvatarUrl(
+    agent.avatarUrl,
+    null,
+    profileQuery.data?.avatarUrl,
+  );
 
   return (
     <AgentIdentityCard
@@ -372,7 +385,7 @@ function StandaloneAgentCard({
       avatar={
         <AgentRuntimeAvatarControl
           activeTestId={`agent-runtime-active-${agent.pubkey}`}
-          avatarUrl={profileQuery.data?.avatarUrl}
+          avatarUrl={avatarUrl}
           errorLabel={friendlyError}
           errorTestId={`agent-runtime-error-${agent.pubkey}`}
           isActive={isActive}
@@ -391,7 +404,7 @@ function StandaloneAgentCard({
           }
         />
       }
-      avatarUrl={profileQuery.data?.avatarUrl}
+      avatarUrl={avatarUrl}
       dataTestId={`managed-agent-${agent.pubkey}`}
       label={title}
       modelLabel={resolveAgentCardModelLabel({

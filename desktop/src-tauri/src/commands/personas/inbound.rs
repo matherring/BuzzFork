@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
     app_state::AppState,
+    migration::retired_catalog::{is_retired_persona_d_tag, is_retired_team_d_tag},
     managed_agents::{
         agent_events::ManagedAgentEventContent, load_personas, persona_events::persona_d_tag,
         save_personas, team_events::TeamEventContent, try_regenerate_nest, AgentDefinition,
@@ -245,6 +246,12 @@ fn reconcile_inbound_persona_event_blocking(
     }
 
     let mut runtime_refresh = None;
+    // The relay history contains a few long-retired catalog coordinates. Keep
+    // their arrival in retention (so the same historical head does not win a
+    // later conflict), but never materialize them into this profile again.
+    if !should_materialize_inbound(kind, &d_tag) {
+        return Ok(());
+    }
     match kind {
         KIND_PERSONA => {
             let mut personas = load_personas(&app)?;
@@ -359,6 +366,16 @@ fn validate_inbound_managed_agent_definition(
         managed_agent.system_prompt.as_deref(),
     )
     .map_err(|error| format!("Inbound managed-agent definition is unsafe: {error}"))
+}
+
+/// Whether an accepted inbound retention head may create or update a local
+/// catalog record. Historical retired coordinates stay retained for conflict
+/// ordering but are never allowed back into the startable catalog.
+fn should_materialize_inbound(kind: u32, d_tag: &str) -> bool {
+    use buzz_core_pkg::kind::{KIND_PERSONA, KIND_TEAM};
+
+    !((kind == KIND_PERSONA && is_retired_persona_d_tag(d_tag))
+        || (kind == KIND_TEAM && is_retired_team_d_tag(d_tag)))
 }
 
 /// Parse an inbound wire event and enforce the signature gate. Everything

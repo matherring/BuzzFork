@@ -152,7 +152,11 @@ export function mergeAgentNamesIntoProfiles(
     merged[key] = {
       ...merged[key],
       displayName: merged[key]?.displayName || agent.name,
-      avatarUrl: merged[key]?.avatarUrl ?? agent.avatarUrl,
+      // A managed agent's persisted avatar is deliberate local metadata.
+      // Prefer it over the relay kind:0 picture, which can be a generic
+      // provider icon, while retaining the profile as a fallback when no
+      // custom metadata is available in this app-data identity.
+      avatarUrl: agent.avatarUrl ?? merged[key]?.avatarUrl ?? null,
       nip05Handle: merged[key]?.nip05Handle ?? null,
       ownerPubkey: merged[key]?.ownerPubkey ?? currentPubkey ?? null,
       isAgent: true,

@@ -1291,6 +1291,34 @@ fn append_channel_description(s: &mut String, channel_info: Option<&PromptChanne
     s.push_str(&format!("\nDescription: {truncated}"));
 }
 
+/// Resolve the reply anchor for the active turn's final event.
+///
+/// This is shared by prompt rendering and the send-boundary context so a
+/// missing `--reply-to` cannot diverge from the instruction the agent saw.
+pub(crate) fn reply_anchor_for_batch(
+    batch: &FlushBatch,
+    channel_info: Option<&PromptChannelInfo>,
+    profile_lookup: Option<&PromptProfileLookup>,
+) -> Option<String> {
+    let last_event = batch.events.last()?;
+    let thread_tags = parse_thread_tags(&last_event.event);
+    let is_dm = channel_info
+        .map(|ci| ci.channel_type == "dm")
+        .unwrap_or(false);
+    if is_dm {
+        return thread_tags
+            .root_event_id
+            .is_some()
+            .then(|| last_event.event.id.to_hex());
+    }
+    resolve_reply_anchor(
+        &last_event.event.pubkey.to_hex(),
+        &thread_tags,
+        &last_event.event.id.to_hex(),
+        profile_lookup,
+    )
+}
+
 /// Format a `[Context]` hints section based on event scope.
 ///
 /// `reply_anchor` is the pre-resolved `--reply-to` target for this turn (see
@@ -1594,20 +1622,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
     //   - top-level     → anchor to the triggering event (it becomes the root)
     // Agent↔agent turns get no forced anchor — deep nesting is intentional
     // there. DMs are always 1:1 with a human, so they always anchor.
-    let sender_pubkey = last_event.event.pubkey.to_hex();
-    let reply_anchor = if is_dm {
-        thread_tags
-            .root_event_id
-            .is_some()
-            .then(|| last_event.event.id.to_hex())
-    } else {
-        resolve_reply_anchor(
-            &sender_pubkey,
-            &thread_tags,
-            &last_event.event.id.to_hex(),
-            args.profile_lookup,
-        )
-    };
+    let reply_anchor = reply_anchor_for_batch(batch, args.channel_info, args.profile_lookup);
     sections.push(format_context_hints(
         batch.channel_id,
         args.channel_info,

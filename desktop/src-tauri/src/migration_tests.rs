@@ -62,6 +62,72 @@ fn copy_dir_all_preserves_nested_files_without_overwriting() {
     );
 }
 
+#[test]
+fn custom_release_agent_avatar_migrates_without_copying_provider_fallbacks_or_overwriting_dev_customization() {
+    let dir = tempfile::tempdir().unwrap();
+    let release_store = dir.path().join("release-managed-agents.json");
+    let dev_store = dir.path().join("dev-managed-agents.json");
+    let provider_fallback = crate::managed_agents::managed_agent_avatar_url("codex")
+        .expect("codex has a bundled fallback");
+    let shared_pubkey = "a".repeat(64);
+    let dev_custom_pubkey = "b".repeat(64);
+    let fallback_only_pubkey = "c".repeat(64);
+    std::fs::write(
+        &release_store,
+        serde_json::json!([
+            {
+                "pubkey": shared_pubkey,
+                "agent_command": "codex",
+                "avatar_url": "https://example.com/release-custom.png"
+            },
+            {
+                "pubkey": fallback_only_pubkey,
+                "agent_command": "codex",
+                "avatar_url": provider_fallback
+            }
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        &dev_store,
+        serde_json::json!([
+            {
+                "pubkey": shared_pubkey,
+                "agent_command": "codex",
+                "avatar_url": provider_fallback
+            },
+            {
+                "pubkey": dev_custom_pubkey,
+                "agent_command": "codex",
+                "avatar_url": "https://example.com/dev-custom.png"
+            },
+            {
+                "pubkey": fallback_only_pubkey,
+                "agent_command": "codex",
+                "avatar_url": provider_fallback
+            }
+        ])
+        .to_string(),
+    )
+    .unwrap();
+
+    migrate_custom_agent_avatars_in_file(&release_store, &dev_store, "now");
+
+    let migrated: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(&dev_store).unwrap()).unwrap();
+    assert_eq!(
+        migrated[0]["avatar_url"],
+        "https://example.com/release-custom.png"
+    );
+    assert_eq!(migrated[0]["updated_at"], "now");
+    assert_eq!(
+        migrated[1]["avatar_url"],
+        "https://example.com/dev-custom.png"
+    );
+    assert_eq!(migrated[2]["avatar_url"], provider_fallback);
+}
+
 /// Helper: create a temp dir structure mimicking canonical + worktree layout.
 /// Packs live in a `.main` sibling (not canonical) to match real-world state.
 /// Returns `(parent_dir_handle, canonical_dir, worktree_dir)`.
