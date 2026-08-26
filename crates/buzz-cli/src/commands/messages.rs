@@ -1,8 +1,11 @@
 use buzz_sdk::{DeleteMessageOptions, DiffMeta, ThreadRef, VoteDirection};
 use nostr::PublicKey;
+use std::path::Path;
 use uuid::Uuid;
 
-use crate::client::{normalize_events, normalize_write_response, BuzzClient};
+use crate::client::{
+    build_imeta_tag, normalize_events, normalize_write_response, BlobDescriptor, BuzzClient,
+};
 use crate::error::CliError;
 use crate::validate::{
     infer_language, parse_event_id, parse_uuid, read_or_stdin, truncate_diff,
@@ -608,6 +611,56 @@ pub struct SendMessageParams {
     pub mentions: Vec<String>,
 }
 
+/// Convert a local path to the display-only `imeta filename` value.
+///
+/// The relay rejects separators and controls in this field. Do the same before
+/// upload so a malformed local filename cannot produce a blob that cannot be
+/// represented safely in the signed event. The basename is deliberately kept
+/// as-is otherwise, including its extension, because Desktop uses it to route
+/// generic attachments to the appropriate document renderer.
+fn sanitized_attachment_filename(file_path: &str) -> Result<String, CliError> {
+    let filename = Path::new(file_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .ok_or_else(|| CliError::Usage(format!("file has no usable filename: {file_path}")))?;
+    if filename.len() > 255
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.chars().any(char::is_control)
+    {
+        return Err(CliError::Usage(format!(
+            "file has an unsafe filename for an attachment: {file_path}"
+        )));
+    }
+    Ok(filename.to_string())
+}
+
+fn markdown_link_label(filename: &str) -> String {
+    filename.replace('\\', "\\\\").replace(']', "\\]")
+}
+
+struct RenderedUpload {
+    content: String,
+    imeta: Vec<String>,
+}
+
+/// Emit an attachment in the same shape Desktop consumes: media uses existing
+/// image/video syntax, while documents are ordinary filename-bearing links.
+fn render_uploaded_file(descriptor: &BlobDescriptor, filename: &str) -> RenderedUpload {
+    let content = if descriptor.mime_type.starts_with("video/") {
+        format!("\n![video]({})", descriptor.url)
+    } else if descriptor.mime_type.starts_with("image/") {
+        format!("\n![image]({})", descriptor.url)
+    } else {
+        format!("\n[{}]({})", markdown_link_label(filename), descriptor.url)
+    };
+    RenderedUpload {
+        content,
+        imeta: build_imeta_tag(descriptor, filename),
+    }
+}
+
 pub async fn cmd_send_message(
     client: &BuzzClient,
     mut p: SendMessageParams,
@@ -651,18 +704,14 @@ pub async fn cmd_send_message(
     let mut media_tags: Vec<Vec<String>> = Vec::new();
     let mut media_content = String::new();
     for file_path in &p.files {
+        let filename = sanitized_attachment_filename(file_path)?;
         let desc = client
             .upload_file(file_path)
             .await
             .map_err(|e| CliError::Other(format!("upload failed for {file_path}: {e}")))?;
-        media_tags.push(crate::client::build_imeta_tag(&desc));
-        if desc.mime_type.starts_with("video/") {
-            media_content.push_str("\n![video](");
-        } else {
-            media_content.push_str("\n![image](");
-        }
-        media_content.push_str(&desc.url);
-        media_content.push(')');
+        let rendered = render_uploaded_file(&desc, &filename);
+        media_tags.push(rendered.imeta);
+        media_content.push_str(&rendered.content);
     }
     let final_content = if media_content.is_empty() {
         p.content.clone()
@@ -1058,10 +1107,11 @@ mod tests {
     use super::{
         channel_id_from_event, cmd_get_thread, event_mention_pubkeys, find_root_from_tags,
         match_profiles_by_name, merge_message_mentions, missing_members,
-        normalize_explicit_mentions, parse_member_pubkeys, resolve_names_to_pubkeys,
-        resolve_thread_target, thread_ref_from_event, thread_ref_from_parent_tags, BuzzClient,
-        CliError, Uuid,
+        normalize_explicit_mentions, parse_member_pubkeys, render_uploaded_file,
+        resolve_names_to_pubkeys, resolve_thread_target, sanitized_attachment_filename,
+        thread_ref_from_event, thread_ref_from_parent_tags, BuzzClient, CliError, Uuid,
     };
+    use crate::client::BlobDescriptor;
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
     };
@@ -1480,6 +1530,74 @@ mod tests {
             .sign_with_keys(&Keys::generate())
             .unwrap();
         assert_eq!(event_mention_pubkeys(&event), vec![PK_VALID_A]);
+    }
+
+    fn document_descriptor(mime_type: &str, url: &str, size: u64) -> BlobDescriptor {
+        BlobDescriptor {
+            url: url.into(),
+            sha256: "a".repeat(64),
+            size,
+            mime_type: mime_type.into(),
+            uploaded: 0,
+            dim: None,
+            blurhash: None,
+            thumb: None,
+            duration: None,
+        }
+    }
+
+    #[test]
+    fn pdf_upload_emits_a_filename_link_and_matching_imeta() {
+        let descriptor = document_descriptor(
+            "application/pdf",
+            "https://relay.test/media/aaaaaaaa.pdf",
+            2048,
+        );
+        let filename = sanitized_attachment_filename("/tmp/Q3-budget.pdf").unwrap();
+        let rendered = render_uploaded_file(&descriptor, &filename);
+
+        assert_eq!(
+            rendered.content,
+            "\n[Q3-budget.pdf](https://relay.test/media/aaaaaaaa.pdf)"
+        );
+        assert_eq!(
+            rendered.imeta,
+            vec![
+                "imeta",
+                "url https://relay.test/media/aaaaaaaa.pdf",
+                "m application/pdf",
+                &format!("x {}", "a".repeat(64)),
+                "size 2048",
+                "filename Q3-budget.pdf",
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_upload_emits_a_filename_link_and_matching_imeta() {
+        let descriptor = document_descriptor(
+            "application/octet-stream",
+            "https://relay.test/media/bbbbbbbb.bin",
+            17,
+        );
+        let filename = sanitized_attachment_filename("/tmp/meeting-notes.md").unwrap();
+        let rendered = render_uploaded_file(&descriptor, &filename);
+
+        assert_eq!(
+            rendered.content,
+            "\n[meeting-notes.md](https://relay.test/media/bbbbbbbb.bin)"
+        );
+        assert_eq!(
+            rendered.imeta,
+            vec![
+                "imeta",
+                "url https://relay.test/media/bbbbbbbb.bin",
+                "m application/octet-stream",
+                &format!("x {}", "a".repeat(64)),
+                "size 17",
+                "filename meeting-notes.md",
+            ]
+        );
     }
 
     // ---- match_profiles_by_name (author resolution for `messages search --author`) ----
