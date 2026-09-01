@@ -17,7 +17,7 @@ fi
 
 GH_USER=$(gh api user --jq .login)
 BRANCH="agent-screenshots/${GH_USER}"
-REPO="block/buzz"
+REPO="${BUZZ_SCREENSHOT_REPO:-block/buzz}"
 
 # macOS ships bash 3.2, which lacks mapfile — build the array with read.
 PNGS=()

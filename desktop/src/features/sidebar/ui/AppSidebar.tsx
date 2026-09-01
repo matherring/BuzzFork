@@ -1,6 +1,8 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
 import { FeatureGate } from "@/shared/features";
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import { useAgentAccessOwnerOnlyQuery } from "@/features/agents/useAgentAccessOwnerOnly";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 
 import { AddCommunityDialog } from "@/features/communities/ui/AddCommunityDialog";
@@ -113,6 +115,7 @@ export function AppSidebar({
   onRemoveCommunity,
   onCreateAgent,
   onSelectAgents,
+  onSelectFleet,
   onSelectProjects,
   onSelectPulse,
   onSelectWorkflows,
@@ -140,6 +143,10 @@ export function AppSidebar({
   onStarChannel,
   onUnstarChannel,
 }: AppSidebarProps) {
+  const ownerOnlyQuery = useAgentAccessOwnerOnlyQuery();
+  const managedAgentsQuery = useManagedAgentsQuery();
+  const showFleet =
+    ownerOnlyQuery.data === true && (managedAgentsQuery.data?.length ?? 0) > 0;
   const activeWorkingByChannelId = useActiveWorkingChannelsById();
   const { status: updateStatus } = useUpdaterContext();
   const canShowSidebarUpdateCard = shouldShowSidebarUpdateCard(updateStatus);
@@ -555,12 +562,14 @@ export function AppSidebar({
               <AppSidebarPrimaryMenu
                 homeBadgeCount={homeBadgeCount}
                 onSelectAgents={onSelectAgents}
+                onSelectFleet={onSelectFleet}
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}
                 onSelectPulse={onSelectPulse}
                 onSelectWorkflows={onSelectWorkflows}
                 projectsOverviewActive={projectsOverviewActive}
                 selectedView={selectedView}
+                showFleet={showFleet}
               />
 
               {isLoading ? (
