@@ -1,4 +1,4 @@
-import { Activity, Bot, Folders, Inbox, Zap } from "lucide-react";
+import { Activity, Bot, Folders, Inbox, RadioTower, Zap } from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { SidebarProjectsSection } from "@/features/sidebar/ui/SidebarProjectsSection";
@@ -18,6 +18,7 @@ type SidebarSelectedView =
   | "channel"
   | "messages"
   | "agents"
+  | "fleet"
   | "workflows"
   | "pulse"
   | "projects";
@@ -41,12 +42,14 @@ type AppSidebarPinnedHeaderProps = {
 type AppSidebarPrimaryMenuProps = {
   homeBadgeCount: number;
   onSelectAgents: () => void;
+  onSelectFleet: () => void;
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
   onSelectWorkflows: () => void;
   projectsOverviewActive: boolean;
   selectedView: SidebarSelectedView;
+  showFleet: boolean;
 };
 
 export function AppSidebarPinnedHeader({
@@ -91,12 +94,14 @@ export function AppSidebarPinnedHeader({
 export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectAgents,
+  onSelectFleet,
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
   onSelectWorkflows,
   projectsOverviewActive,
   selectedView,
+  showFleet,
 }: AppSidebarPrimaryMenuProps) {
   return (
     <>
@@ -126,6 +131,21 @@ export function AppSidebarPrimaryMenu({
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>
+          {showFleet ? (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className="data-[active=true]:font-normal"
+                data-testid="open-fleet-view"
+                isActive={selectedView === "fleet"}
+                onClick={onSelectFleet}
+                tooltip="Fleet"
+                type="button"
+              >
+                <RadioTower className="h-4 w-4" />
+                <SidebarMenuLabel>Fleet</SidebarMenuLabel>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ) : null}
           <FeatureGate feature="pulse">
             <SidebarMenuItem>
               <SidebarMenuButton

@@ -5,6 +5,7 @@ import {
   markAllReadSources,
   activateDesktopNotificationTarget,
   createDesktopNotificationActivationQueue,
+  deriveShellRoute,
   shouldBounceForChannelNotification,
 } from "./AppShell.helpers.ts";
 
@@ -242,4 +243,11 @@ test("markAllReadSources skips the active marker without projected activity", ()
   });
 
   assert.deepEqual(calls, ["channels"]);
+});
+
+test("deriveShellRoute recognizes the Fleet dashboard", () => {
+  assert.deepEqual(deriveShellRoute("/fleet"), {
+    selectedChannelId: null,
+    selectedView: "fleet",
+  });
 });
