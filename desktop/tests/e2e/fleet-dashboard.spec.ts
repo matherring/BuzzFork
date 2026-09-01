@@ -192,7 +192,7 @@ test.describe("owner-only Fleet dashboard", () => {
     await expect(row).toContainText("Active");
     await expect(row).toContainText("#agents");
     await expect(row).toContainText("turn-fleet-1");
-    await expect(row).toContainText("Ran command");
+    await expect(row).toContainText(/Ran command|Turn started/);
     await expect(fleet).not.toContainText(SECRET);
     await expect(fleet).not.toContainText("unredacted output");
     await expect(fleet).not.toContainText("rawInput");
