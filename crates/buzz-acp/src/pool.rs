@@ -2688,6 +2688,21 @@ pub async fn run_prompt_task(
             );
         }
 
+        agent.acp.observe(
+            "turn_manifest",
+            crate::turn_manifest::build_turn_manifest(&crate::turn_manifest::TurnManifestInput {
+                turn_id: &turn_id,
+                session_id: &session_id,
+                cwd: &ctx.cwd,
+                model: agent.desired_model.as_deref(),
+                scope: &b.scope,
+                channel_info: channel_info.as_ref(),
+                batch: b,
+                conversation_context: conversation_context.as_ref(),
+                standing: &standing,
+            }),
+        );
+
         crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {

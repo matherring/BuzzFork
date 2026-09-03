@@ -66,13 +66,22 @@ const snapshot = {
       id: "channel-a",
       name: "agents",
       description: "",
-      workstreams: [{ id: "session-1", title: "Session 1", phase: "Live", turns: [alpha] }],
+      workstreams: [
+        { id: "session-1", title: "Session 1", phase: "Live", turns: [alpha] },
+      ],
     },
     {
       id: "channel-b",
       name: "delivery",
       description: "",
-      workstreams: [{ id: "session-2", title: "Session 2", phase: "Archive", turns: [beta] }],
+      workstreams: [
+        {
+          id: "session-2",
+          title: "Session 2",
+          phase: "Archive",
+          turns: [beta],
+        },
+      ],
     },
   ],
 };
@@ -81,17 +90,25 @@ test("ports Control Tower flatten, find, count, status, and search selectors", (
   assert.equal(allTurns(snapshot).length, 2);
   assert.equal(findTurn(snapshot, alpha.id)?.agentName, "Alpha");
   assert.equal(countWorkingTurns(snapshot), 1);
-  assert.deepEqual(turnsByStatus(snapshot, "archived").map((item) => item.id), [beta.id]);
+  assert.deepEqual(
+    turnsByStatus(snapshot, "archived").map((item) => item.id),
+    [beta.id],
+  );
   assert.equal(matchesTurnSearch(alpha, "control tower"), true);
   assert.equal(matchesTurnSearch(alpha, "TURN-1"), true);
   assert.equal(matchesTurnSearch(alpha, "unrelated"), false);
 });
 
 test("exact turn keys cannot mix concurrent channels or sessions", () => {
-  const channelVariant = turnIdentityKey({ ...alphaIdentity, channelId: "channel-b" });
-  const sessionVariant = turnIdentityKey({ ...alphaIdentity, sessionId: "session-2" });
+  const channelVariant = turnIdentityKey({
+    ...alphaIdentity,
+    channelId: "channel-b",
+  });
+  const sessionVariant = turnIdentityKey({
+    ...alphaIdentity,
+    sessionId: "session-2",
+  });
   assert.notEqual(channelVariant, alpha.id);
   assert.notEqual(sessionVariant, alpha.id);
   assert.notEqual(channelVariant, sessionVariant);
 });
-

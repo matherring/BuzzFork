@@ -133,4 +133,3 @@ export type TowerSnapshot = {
   connection: FleetConnectionState;
   channels: FleetChannel[];
 };
-

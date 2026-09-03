@@ -13,6 +13,7 @@ mod queue;
 mod relay;
 mod scope;
 mod setup_mode;
+mod turn_manifest;
 mod usage;
 
 pub use usage::TurnUsage;

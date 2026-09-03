@@ -63,4 +63,3 @@ export function matchesTurnSearch(turn: AgentTurn, query: string): boolean {
     turn.sessionId,
   ].some((value) => value.toLocaleLowerCase().includes(normalized));
 }
-
