@@ -109,28 +109,30 @@ fn redact_with_limit(value: &str, limit: usize) -> String {
     truncate_to(&redacted, limit)
 }
 
-fn manifest_source(
+struct ManifestSourceInput<'a> {
     id: String,
-    kind: &str,
-    label: &str,
-    raw: &str,
-    detail: &str,
-    visibility: &str,
+    kind: &'a str,
+    label: &'a str,
+    raw: &'a str,
+    detail: &'a str,
+    visibility: &'a str,
     content: Option<String>,
     fields: Vec<ManifestField>,
-    withheld_reason: Option<&str>,
-) -> ManifestContextSource {
+    withheld_reason: Option<&'a str>,
+}
+
+fn manifest_source(input: ManifestSourceInput<'_>) -> ManifestContextSource {
     ManifestContextSource {
-        id,
-        kind: kind.into(),
-        label: label.into(),
-        detail: detail.into(),
-        hash: short_hash(raw.as_bytes()),
-        size: byte_size(raw.len()),
-        visibility: visibility.into(),
-        content,
-        fields,
-        withheld_reason: withheld_reason.map(str::to_string),
+        id: input.id,
+        kind: input.kind.into(),
+        label: input.label.into(),
+        detail: input.detail.into(),
+        hash: short_hash(input.raw.as_bytes()),
+        size: byte_size(input.raw.len()),
+        visibility: input.visibility.into(),
+        content: input.content,
+        fields: input.fields,
+        withheld_reason: input.withheld_reason.map(str::to_string),
     }
 }
 
@@ -143,17 +145,18 @@ fn project_standing_source(
     reason: &str,
 ) -> Option<ManifestContextSource> {
     let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
-    Some(manifest_source(
-        format!("{turn_id}-context-{index}"),
+    Some(manifest_source(ManifestSourceInput {
+        id: format!("{turn_id}-context-{index}"),
         kind,
         label,
         raw,
-        "This context was supplied to the runtime; select it to inspect its visibility boundary.",
-        "provenance",
-        None,
-        Vec::new(),
-        Some(reason),
-    ))
+        detail:
+            "This context was supplied to the runtime; select it to inspect its visibility boundary.",
+        visibility: "provenance",
+        content: None,
+        fields: Vec::new(),
+        withheld_reason: Some(reason),
+    }))
 }
 
 fn context_summary(context: &ConversationContext) -> (String, Vec<ManifestField>) {
@@ -258,17 +261,17 @@ fn project_info_source(turn_id: &str, project: &PromptProjectInfo) -> ManifestCo
             value: redact_with_limit(&format!("{owner}/{id}"), 240),
         });
     }
-    manifest_source(
-        format!("{turn_id}-project"),
-        "project",
-        "Buzz project",
-        &raw,
-        "Authoritative NIP-MP project metadata resolved for this channel.",
-        "full",
-        None,
+    manifest_source(ManifestSourceInput {
+        id: format!("{turn_id}-project"),
+        kind: "project",
+        label: "Buzz project",
+        raw: &raw,
+        detail: "Authoritative NIP-MP project metadata resolved for this channel.",
+        visibility: "full",
+        content: None,
         fields,
-        None,
-    )
+        withheld_reason: None,
+    })
 }
 
 fn git_directory(cwd: &Path) -> Option<PathBuf> {
@@ -400,17 +403,17 @@ pub(crate) fn build_turn_manifest(input: &TurnManifestInput<'_>) -> Value {
         });
     }
 
-    let mut context = vec![manifest_source(
-        format!("{}-runtime-context", input.turn_id),
-        "repository",
-        "Runtime context",
-        &runtime_raw,
-        "Safe runtime metadata for this exact ACP session.",
-        "full",
-        None,
-        runtime_fields,
-        None,
-    )];
+    let mut context = vec![manifest_source(ManifestSourceInput {
+        id: format!("{}-runtime-context", input.turn_id),
+        kind: "repository",
+        label: "Runtime context",
+        raw: &runtime_raw,
+        detail: "Safe runtime metadata for this exact ACP session.",
+        visibility: "full",
+        content: None,
+        fields: runtime_fields,
+        withheld_reason: None,
+    })];
 
     let trigger_raw = input
         .batch
@@ -419,34 +422,36 @@ pub(crate) fn build_turn_manifest(input: &TurnManifestInput<'_>) -> Value {
         .map(|event| format!("{}\n{}", event.event.id.to_hex(), event.event.content))
         .collect::<Vec<_>>()
         .join("\n---\n");
-    context.push(manifest_source(
-        format!("{}-trigger", input.turn_id),
-        "thread",
-        "Triggering Buzz turn",
-        &trigger_raw,
-        "Human-authored Buzz request content that started this runtime turn.",
-        "summary",
-        Some(redact_with_limit(&trigger_raw, MAX_VISIBLE_TEXT)),
-        vec![ManifestField {
+    context.push(manifest_source(ManifestSourceInput {
+        id: format!("{}-trigger", input.turn_id),
+        kind: "thread",
+        label: "Triggering Buzz turn",
+        raw: &trigger_raw,
+        detail: "Human-authored Buzz request content that started this runtime turn.",
+        visibility: "summary",
+        content: Some(redact_with_limit(&trigger_raw, MAX_VISIBLE_TEXT)),
+        fields: vec![ManifestField {
             label: "Events".into(),
             value: input.batch.events.len().to_string(),
         }],
-        None,
-    ));
+        withheld_reason: None,
+    }));
 
     if let Some(conversation) = input.conversation_context {
         let (raw, fields) = context_summary(conversation);
-        context.push(manifest_source(
-            format!("{}-conversation", input.turn_id),
-            "thread",
-            "Conversation context",
-            &raw,
-            "Thread or direct-message history supplied to the runtime.",
-            "provenance",
-            None,
+        context.push(manifest_source(ManifestSourceInput {
+            id: format!("{}-conversation", input.turn_id),
+            kind: "thread",
+            label: "Conversation context",
+            raw: &raw,
+            detail: "Thread or direct-message history supplied to the runtime.",
+            visibility: "provenance",
+            content: None,
             fields,
-            Some("Message bodies stay in Buzz; Fleet exposes provenance, counts, hash, and size."),
-        ));
+            withheld_reason: Some(
+                "Message bodies stay in Buzz; Fleet exposes provenance, counts, hash, and size.",
+            ),
+        }));
     }
 
     let standing = input.standing;
