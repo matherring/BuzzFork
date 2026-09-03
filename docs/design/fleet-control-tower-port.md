@@ -27,3 +27,33 @@ Visual acceptance references from the pinned source:
 - `docs/screenshots/evidence-delivery-chain.png`
 - `docs/screenshots/channel-picker.png`
 
+## Source map
+
+| Control Tower v0.8.2 source | BuzzFork adaptation |
+| --- | --- |
+| `src/domain.ts` | `desktop/src/features/fleet/controlTowerDomain.ts` |
+| `src/selectors.ts` and `src/selectors.test.ts` | `controlTowerSelectors.ts` and `controlTowerSelectors.test.mjs` |
+| `src/dataSource.ts`, `src-tauri/src/observer_stream.rs` | `controlTowerProjection.ts` and `controlTowerProjection.test.mjs` |
+| `src/App.tsx` | `ui/FleetScreen.tsx` and `ui/ControlTowerDetails.tsx` |
+| `src/styles.css` | `ui/FleetScreen.css` (scoped under `.fleet-tower`) |
+| `src/fixtures.ts`, `src/App.test.tsx`, repository screenshots | `desktop/tests/e2e/fleet-dashboard.spec.ts` |
+| `src-tauri/src/local_workstream.rs` | `crates/buzz-acp/src/turn_manifest.rs` |
+
+The standalone `ChannelPicker`, onboarding, updater, device identity, relay
+configuration, exporter processes, and Tauri shell are deliberately not copied.
+Buzz already owns those application boundaries.
+
+## Attribution and privacy boundary
+
+Every turn is keyed with a length-prefixed composite of agent public key,
+channel ID, turn ID, and session ID. Frames that do not have enough identity to
+join exactly one session stay unresolved instead of being attached to another
+turn. Live and archived copies deduplicate by frame identity before reduction.
+
+The harness emits a source-redacted `turn_manifest` only after the ACP session
+has resolved. It exposes safe trigger text and runtime/project fields, while raw
+base, system, team, memory, conversation, and canvas bodies remain at source.
+Each supplied context source still carries a SHA-256 prefix, byte size,
+visibility boundary, and explicit withheld reason. Delivery begins with one
+exact local-observation fact; commit, push, PR, merge, and deploy remain
+incomplete until a semantic evidence event supplies supporting facts.
