@@ -47,6 +47,7 @@ export type FleetProject = {
 
 export type FleetProjectionSource = {
   agent: ManagedAgent;
+  observerConnectionState: FleetObserverConnection;
   liveEvents: readonly ObserverEvent[];
   archivedEventsByChannel?: ReadonlyMap<string, readonly ObserverEvent[]>;
 };
@@ -58,6 +59,7 @@ type SourcedObserverEvent = {
 
 type TurnBucket = {
   agent: ManagedAgent;
+  observerConnectionState: FleetObserverConnection;
   channelId: string;
   turnId: string;
   sessionId: string;
@@ -211,6 +213,7 @@ function bucketTurns(source: FleetProjectionSource): TurnBucket[] {
     const key = turnIdentityKey(identity);
     const bucket = buckets.get(key) ?? {
       agent: source.agent,
+      observerConnectionState: source.observerConnectionState,
       channelId: event.channelId,
       turnId: event.turnId,
       sessionId,
@@ -541,6 +544,7 @@ function resolveStatus(input: {
   if (terminal?.kind === "turn_completed") {
     return input.onlyArchived ? "archived" : "complete";
   }
+  if (input.onlyArchived) return "archived";
   if (input.connection === "unavailable") return "unavailable";
   const lastAt = Date.parse(lastTimestamp(input.events) ?? "");
   if (
@@ -600,7 +604,6 @@ function projectForChannel(
 
 function turnFromBucket(
   bucket: TurnBucket,
-  connection: FleetConnectionState,
   now: number,
 ): AgentTurn & {
   workstreamId: string;
@@ -621,6 +624,10 @@ function turnFromBucket(
       item.type === "thought",
   );
   const onlyArchived = sourced.every(({ archived }) => archived);
+  const connection = resolveConnection(
+    bucket.observerConnectionState,
+    events.length > 0,
+  );
   const status = resolveStatus({ events, onlyArchived, connection, now });
   const started = events.find((event) => event.kind === "turn_started");
   const completed = [...events]
@@ -694,13 +701,25 @@ function resolveConnection(
   return hasEvents ? "stale" : "unavailable";
 }
 
+function aggregateObserverConnectionState(
+  sources: readonly FleetProjectionSource[],
+): FleetObserverConnection {
+  const states = sources.map((source) => source.observerConnectionState);
+  return (
+    states.find((state) => state === "error") ??
+    states.find((state) => state === "closed") ??
+    states.find((state) => state === "connecting") ??
+    states.find((state) => state === "open") ??
+    "idle"
+  );
+}
+
 /** Build the Control Tower work graph from Buzz's existing observer boundary. */
 export function projectControlTowerSnapshot(input: {
   sources: readonly FleetProjectionSource[];
   channels: readonly Pick<Channel, "id" | "name" | "description">[];
   projects?: readonly FleetProject[];
   presence?: PresenceLookup;
-  observerConnectionState: FleetObserverConnection;
   now: number;
 }): TowerSnapshot {
   const hasLiveEvents = input.sources.some(
@@ -714,12 +733,12 @@ export function projectControlTowerSnapshot(input: {
       ),
   );
   const connection = resolveConnection(
-    input.observerConnectionState,
+    aggregateObserverConnectionState(input.sources),
     hasEvents,
   );
   const turns = input.sources
     .flatMap(bucketTurns)
-    .map((bucket) => turnFromBucket(bucket, connection, input.now));
+    .map((bucket) => turnFromBucket(bucket, input.now));
   const projects = input.projects ?? [];
 
   const channels: FleetChannel[] = input.channels.map((channel) => {

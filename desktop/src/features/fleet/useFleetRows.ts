@@ -11,22 +11,7 @@ import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
 import { useProjectsQuery } from "@/features/projects/hooks";
 import { useNow } from "@/shared/lib/useNow";
-import {
-  projectControlTowerSnapshot,
-  type FleetObserverConnection,
-} from "./controlTowerProjection";
-
-function aggregateConnectionState(
-  states: readonly FleetObserverConnection[],
-): FleetObserverConnection {
-  return (
-    states.find((state) => state === "error") ??
-    states.find((state) => state === "closed") ??
-    states.find((state) => state === "connecting") ??
-    states.find((state) => state === "open") ??
-    "idle"
-  );
-}
+import { projectControlTowerSnapshot } from "./controlTowerProjection";
 
 /**
  * Buzz application-boundary adapter for the directly ported Control Tower
@@ -51,12 +36,11 @@ export function useFleetRows(archiveChannelId: string | null = null) {
 
   React.useEffect(() => subscribeAgentObserverStore(refresh), []);
 
-  const observerStates: FleetObserverConnection[] = [];
   const sources = managedAgents.map((agent) => {
     const observer = getAgentObserverSnapshot(agent.pubkey);
-    observerStates.push(observer.connectionState);
     return {
       agent,
+      observerConnectionState: observer.connectionState,
       liveEvents: observer.events,
       archivedEventsByChannel: new Map(
         channels.map((channel) => [
@@ -66,13 +50,11 @@ export function useFleetRows(archiveChannelId: string | null = null) {
       ),
     };
   });
-  const observerConnectionState = aggregateConnectionState(observerStates);
   const snapshot = projectControlTowerSnapshot({
     sources,
     channels,
     projects,
     presence: presenceQuery.data ?? {},
-    observerConnectionState,
     now,
   });
 
@@ -82,7 +64,6 @@ export function useFleetRows(archiveChannelId: string | null = null) {
     managedAgents,
     managedAgentsQuery,
     projectsQuery,
-    observerConnectionState,
     presenceResolution: presenceQuery.isError
       ? ("error" as const)
       : presenceQuery.isSuccess || managedAgents.length === 0

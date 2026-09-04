@@ -8,6 +8,7 @@ import {
 import { allTurns } from "./controlTowerSelectors.ts";
 
 const AGENT = "a".repeat(64);
+const AGENT_B = "b".repeat(64);
 const CHANNEL_A = "11111111-1111-4111-8111-111111111111";
 const CHANNEL_B = "22222222-2222-4222-8222-222222222222";
 const NOW = Date.parse("2026-09-02T21:00:00Z");
@@ -24,6 +25,12 @@ const managedAgent = {
   status: "running",
   lastError: null,
   lastErrorCode: null,
+};
+
+const secondManagedAgent = {
+  ...managedAgent,
+  pubkey: AGENT_B,
+  name: "Reviewer",
 };
 
 const channels = [
@@ -202,11 +209,19 @@ function manifest({
   });
 }
 
-function snapshot(liveEvents, overrides = {}) {
+function snapshot(
+  liveEvents,
+  { sourceConnectionState = "open", ...overrides } = {},
+) {
   return projectControlTowerSnapshot({
-    sources: [{ agent: managedAgent, liveEvents }],
+    sources: [
+      {
+        agent: managedAgent,
+        observerConnectionState: sourceConnectionState,
+        liveEvents,
+      },
+    ],
     channels,
-    observerConnectionState: "open",
     now: NOW,
     ...overrides,
   });
@@ -309,9 +324,15 @@ test("archive-only reload preserves the turn and marks it archived", () => {
   ];
   const archivedEventsByChannel = new Map([[CHANNEL_A, archived]]);
   const result = projectControlTowerSnapshot({
-    sources: [{ agent: managedAgent, liveEvents: [], archivedEventsByChannel }],
+    sources: [
+      {
+        agent: managedAgent,
+        observerConnectionState: "closed",
+        liveEvents: [],
+        archivedEventsByChannel,
+      },
+    ],
     channels,
-    observerConnectionState: "closed",
     now: NOW,
   });
   const [turn] = allTurns(result);
@@ -358,17 +379,81 @@ test("reconnect and stale clocks preserve data without claiming it is live", () 
   assert.equal(allTurns(snapshot([old]))[0].status, "stale");
 
   const reconnecting = snapshot([frame({ seq: 1 })], {
-    observerConnectionState: "connecting",
+    sourceConnectionState: "connecting",
   });
   assert.equal(reconnecting.connection, "reconnecting");
   assert.equal(allTurns(reconnecting)[0].status, "stale");
 
-  const unavailable = snapshot([], { observerConnectionState: "error" });
+  const unavailable = snapshot([], { sourceConnectionState: "error" });
   assert.equal(unavailable.connection, "unavailable");
   assert.equal(
     unavailable.channels.every((channel) => channel.workstreams.length === 0),
     true,
   );
+});
+
+test("classifies each live turn from its owning agent connection", () => {
+  const result = projectControlTowerSnapshot({
+    sources: [
+      {
+        agent: managedAgent,
+        observerConnectionState: "open",
+        liveEvents: [frame({ seq: 1 })],
+      },
+      {
+        agent: secondManagedAgent,
+        observerConnectionState: "closed",
+        liveEvents: [
+          frame({
+            seq: 2,
+            channelId: CHANNEL_B,
+            turnId: "turn-b",
+            sessionId: "session-b",
+          }),
+        ],
+      },
+    ],
+    channels,
+    now: NOW,
+  });
+  const turns = allTurns(result);
+  const connected = turns.find((turn) => turn.agentPubkey === AGENT);
+  const disconnected = turns.find((turn) => turn.agentPubkey === AGENT_B);
+  assert.equal(connected.status, "working");
+  assert.equal(disconnected.status, "stale");
+});
+
+test("keeps a recent incomplete archive non-live beside another agent's live turn", () => {
+  const archived = frame({
+    seq: 2,
+    channelId: CHANNEL_B,
+    turnId: "turn-b",
+    sessionId: "session-b",
+    timestamp: new Date(NOW - 500).toISOString(),
+  });
+  const result = projectControlTowerSnapshot({
+    sources: [
+      {
+        agent: managedAgent,
+        observerConnectionState: "open",
+        liveEvents: [frame({ seq: 1 })],
+      },
+      {
+        agent: secondManagedAgent,
+        observerConnectionState: "open",
+        liveEvents: [],
+        archivedEventsByChannel: new Map([[CHANNEL_B, [archived]]]),
+      },
+    ],
+    channels,
+    now: NOW,
+  });
+  const turns = allTurns(result);
+  const live = turns.find((turn) => turn.agentPubkey === AGENT);
+  const archive = turns.find((turn) => turn.agentPubkey === AGENT_B);
+  assert.equal(live.status, "working");
+  assert.equal(archive.status, "archived");
+  assert.equal(archive.archived, true);
 });
 
 test("file-edit artifacts stay inside their exact turn and tool secrets are redacted", () => {

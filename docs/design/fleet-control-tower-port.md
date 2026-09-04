@@ -49,6 +49,9 @@ Every turn is keyed with a length-prefixed composite of agent public key,
 channel ID, turn ID, and session ID. Frames that do not have enough identity to
 join exactly one session stay unresolved instead of being attached to another
 turn. Live and archived copies deduplicate by frame identity before reduction.
+Each turn is classified from its owning agent's observer connection; a failure
+for one managed agent cannot make another agent's live turn stale. Archive-only
+nonterminal turns remain explicitly archived even when their frames are recent.
 
 The harness emits a source-redacted `turn_manifest` only after the ACP session
 has resolved. It exposes safe trigger text and runtime/project fields, while raw
