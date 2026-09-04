@@ -1,34 +1,30 @@
 import * as React from "react";
 
 import {
-  getActiveTurnsForAgent,
-  subscribeActiveAgentTurns,
-} from "@/features/agents/activeAgentTurnsStore";
-import {
   getAgentObserverSnapshot,
-  getAgentTranscript,
+  getArchivedChannelEvents,
   subscribeAgentObserverStore,
 } from "@/features/agents/observerRelayStore";
-import {
-  useAcpRuntimesQuery,
-  useManagedAgentsQuery,
-} from "@/features/agents/hooks";
-import { useManagedAgentRuntimesQuery } from "@/features/agents/managedAgentRuntimeHooks";
+import { useManagedAgentsQuery } from "@/features/agents/hooks";
+import { useLoadArchivedObserverEvents } from "@/features/agents/ui/useObserverEvents";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import { usePresenceQuery } from "@/features/presence/hooks";
+import { useProjectsQuery } from "@/features/projects/hooks";
 import { useNow } from "@/shared/lib/useNow";
-import {
-  aggregateFleetAgents,
-  type FleetAgentSource,
-  type FleetPresenceResolution,
-} from "./fleetAggregation";
+import { projectControlTowerSnapshot } from "./controlTowerProjection";
 
-export function useFleetRows() {
+/**
+ * Buzz application-boundary adapter for the directly ported Control Tower
+ * projection. The adapter owns no identity, relay, updater, or configuration;
+ * it reads the stores and queries already mounted by Buzz Desktop.
+ */
+export function useFleetRows(archiveChannelId: string | null = null) {
   const managedAgentsQuery = useManagedAgentsQuery();
   const managedAgents = managedAgentsQuery.data ?? [];
-  const runtimesQuery = useAcpRuntimesQuery();
-  const runtimeStatusesQuery = useManagedAgentRuntimesQuery();
   const channelsQuery = useChannelsQuery();
+  const channels = channelsQuery.data ?? [];
+  const projectsQuery = useProjectsQuery();
+  const projects = projectsQuery.data ?? [];
   const presenceQuery = usePresenceQuery(
     managedAgents.map((agent) => agent.pubkey),
     { enabled: managedAgents.length > 0 },
@@ -36,62 +32,46 @@ export function useFleetRows() {
   const [, refresh] = React.useReducer((version: number) => version + 1, 0);
   const now = useNow(1_000);
 
-  React.useEffect(() => {
-    const unsubscribeObserver = subscribeAgentObserverStore(refresh);
-    const unsubscribeTurns = subscribeActiveAgentTurns(refresh);
-    return () => {
-      unsubscribeObserver();
-      unsubscribeTurns();
-    };
-  }, []);
+  useLoadArchivedObserverEvents(Boolean(archiveChannelId), archiveChannelId);
 
-  const sources = managedAgents.map<FleetAgentSource>((agent) => {
-    const snapshot = getAgentObserverSnapshot(agent.pubkey);
+  React.useEffect(() => subscribeAgentObserverStore(refresh), []);
+
+  const sources = managedAgents.map((agent) => {
+    const observer = getAgentObserverSnapshot(agent.pubkey);
     return {
       agent,
-      activeTurns: getActiveTurnsForAgent(agent.pubkey),
-      events: snapshot.events,
-      transcript: getAgentTranscript(agent.pubkey),
-      observerConnectionState: snapshot.connectionState,
-      observerErrorMessage: snapshot.errorMessage,
+      observerConnectionState: observer.connectionState,
+      liveEvents: observer.events,
+      archivedEventsByChannel: new Map(
+        channels.map((channel) => [
+          channel.id,
+          getArchivedChannelEvents(agent.pubkey, channel.id),
+        ]),
+      ),
     };
   });
-  const presenceResolution: FleetPresenceResolution = presenceQuery.isError
-    ? "error"
-    : presenceQuery.isSuccess || managedAgents.length === 0
-      ? "ready"
-      : "loading";
-  const rows = aggregateFleetAgents({
+  const snapshot = projectControlTowerSnapshot({
     sources,
-    runtimes: runtimesQuery.data ?? [],
-    runtimeStatuses: runtimeStatusesQuery.data ?? [],
-    channels: channelsQuery.data ?? [],
+    channels,
+    projects,
     presence: presenceQuery.data ?? {},
-    presenceResolution,
     now,
   });
-  const observerConnectionState =
-    sources.find((source) => source.observerConnectionState === "error")
-      ?.observerConnectionState ??
-    sources.find((source) => source.observerConnectionState === "closed")
-      ?.observerConnectionState ??
-    sources.find((source) => source.observerConnectionState === "connecting")
-      ?.observerConnectionState ??
-    sources.find((source) => source.observerConnectionState === "open")
-      ?.observerConnectionState ??
-    "idle";
 
   return {
-    rows,
-    channels: channelsQuery.data ?? [],
+    snapshot,
+    channels,
     managedAgents,
     managedAgentsQuery,
-    observerConnectionState,
-    presenceResolution,
+    projectsQuery,
+    presenceResolution: presenceQuery.isError
+      ? ("error" as const)
+      : presenceQuery.isSuccess || managedAgents.length === 0
+        ? ("ready" as const)
+        : ("loading" as const),
     isLoading:
       managedAgentsQuery.isLoading ||
-      runtimesQuery.isLoading ||
-      runtimeStatusesQuery.isLoading ||
-      channelsQuery.isLoading,
+      channelsQuery.isLoading ||
+      projectsQuery.isLoading,
   };
 }
