@@ -4682,6 +4682,7 @@ async fn publish_final_text_reply(
         &[],
         false,
         &[],
+        &[],
     ) {
         Ok(builder) => builder,
         Err(error) => {
