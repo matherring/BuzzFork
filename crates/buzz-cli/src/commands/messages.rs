@@ -608,6 +608,21 @@ pub struct SendMessageParams {
     pub mentions: Vec<String>,
 }
 
+fn resolve_send_message_content(
+    value: &str,
+    has_files: bool,
+    read_content: impl FnOnce(&str) -> Result<String, CliError>,
+) -> Result<String, CliError> {
+    let content = read_content(value)?;
+    validate_content_size(&content)?;
+    if content.trim().is_empty() && !has_files {
+        return Err(CliError::Usage(
+            "message content must not be empty unless at least one --file is provided".into(),
+        ));
+    }
+    Ok(content)
+}
+
 pub async fn cmd_send_message(
     client: &BuzzClient,
     mut p: SendMessageParams,
@@ -616,8 +631,7 @@ pub async fn cmd_send_message(
     // jam shell-metacharacter-heavy text (backticks, $vars, etc.) through argv
     // quoting — the source of countless self-inflicted command-substitution
     // bugs for agent and human users alike.
-    p.content = read_or_stdin(&p.content)?;
-    validate_content_size(&p.content)?;
+    p.content = resolve_send_message_content(&p.content, !p.files.is_empty(), read_or_stdin)?;
     if let Some(ref r) = p.reply_to {
         validate_hex64(r)?;
     }
@@ -1087,8 +1101,8 @@ mod tests {
         channel_id_from_event, cmd_get_thread, cmd_send_message, event_mention_pubkeys,
         find_root_from_tags, format_events, match_profiles_by_name, merge_message_mentions,
         missing_members, normalize_explicit_mentions, parse_member_pubkeys,
-        resolve_names_to_pubkeys, resolve_thread_target, thread_ref_from_event,
-        thread_ref_from_parent_tags, BuzzClient, CliError, Uuid,
+        resolve_names_to_pubkeys, resolve_send_message_content, resolve_thread_target,
+        thread_ref_from_event, thread_ref_from_parent_tags, BuzzClient, CliError, Uuid,
     };
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
@@ -1105,6 +1119,37 @@ mod tests {
     const PK_VALID_A: &str = "35c18ae273fccfaf80d629e20e7f8721b90499379addff533054acc2504c12b4";
     const PK_VALID_B: &str = "c6237ef84fa537c78dcee78efd2d4e59f728859c7f194da42ac51ededfa0be05";
     const PK_VALID_C: &str = "f4a42a97e594b77bdbd8ee35191c8b28a94a4cb871d96f32921558275421fb68";
+
+    #[test]
+    fn send_message_rejects_empty_text_without_media() {
+        let result = resolve_send_message_content("", false, |value| Ok(value.to_string()));
+
+        assert!(matches!(result, Err(crate::error::CliError::Usage(_))));
+    }
+
+    #[test]
+    fn send_message_rejects_whitespace_only_text_without_media() {
+        let result = resolve_send_message_content(" \n\t ", false, |value| Ok(value.to_string()));
+
+        assert!(matches!(result, Err(crate::error::CliError::Usage(_))));
+    }
+
+    #[test]
+    fn send_message_rejects_empty_text_read_from_stdin() {
+        let result = resolve_send_message_content("-", false, |value| {
+            assert_eq!(value, "-");
+            Ok(String::new())
+        });
+
+        assert!(matches!(result, Err(crate::error::CliError::Usage(_))));
+    }
+
+    #[test]
+    fn send_message_allows_empty_text_with_media() {
+        let result = resolve_send_message_content("", true, |value| Ok(value.to_string()));
+
+        assert_eq!(result.unwrap(), "");
+    }
 
     #[test]
     fn compact_event_format_remains_the_three_key_contract() {
